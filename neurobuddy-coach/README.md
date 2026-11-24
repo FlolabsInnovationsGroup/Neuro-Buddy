@@ -27,7 +27,7 @@ The app creates `data/coach.sqlite3`, `data/recordings/<uuid>/` and `data/report
 
 1. **Dataset Library (central Repository)**: team and athlete folders, per-athlete EEG shelves, global `TEST TYPE` and `FILE TYPE` selectors, local Downloads import, read-only OpenNeuro context window, task-aware input slots, and drag targets for single EEG, athlete, or team processing.
 2. **Analysis**: queued/running/completed jobs; direct links to the original generated pipeline HTML reports for GENERAL, ODDBALL, MOTOR, SLEEP, and longitudinal athlete comparisons; team-batch links to each completed athlete's report. The website no longer rebuilds a truncated results preview.
-3. **Advanced Analysis**: draggable/selectable team and athlete result packages, local JSON preview/download, and an explicitly disabled future AI-processing action. No AI model has been connected.
+3. **Advanced Analysis**: draggable/selectable team and athlete result packages, local JSON preview/download, and AI report analysis. Drag any generated HTML report (or drop a report `.html` file) into the processing area and press **Process with AI** to send it to an external AI analysis API that looks for EEG patterns associated with overtraining, stress, fatigue and sleep deprivation. The API is a placeholder until FloLabs supplies it: set `NEUROBUDDY_AI_API_URL` (and optionally `NEUROBUDDY_AI_API_KEY`) to enable it. See `docs/AI_ANALYSIS_API.md` for the request/response contract and `tools/mock_ai_api.py` for a local stand-in.
 
 ## Coach workflow
 
