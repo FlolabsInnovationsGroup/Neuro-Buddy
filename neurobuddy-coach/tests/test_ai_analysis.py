@@ -208,3 +208,58 @@ def test_placeholder_mock_api_answers_the_real_request(tmp_path, monkeypatch):
         assert 'Figure 1: Oddball ERP target vs standard' in response.json()['analysis_markdown']
     finally:
         server.shutdown()
+
+
+COMPARISON = """<html><head><title>Neuro-buddy Athlete Comparative Report</title></head><body>
+<h1>Neuro-buddy Athlete Comparative Report</h1><h2>Longitudinal file</h2><table>
+<tr><th>Metric</th><th>Unit</th><th>Baseline Mean</th><th>Baseline Sd</th><th>Test Value</th><th>Z Score</th><th>Flag</th><th>Status</th><th>Baseline N</th></tr>
+<tr><td>specialized.oddball.erp.p300_difference_peak_uv</td><td>µV</td><td>13.2</td><td>0.12</td><td>11.6</td><td>-13.3</td><td></td><td>Abnormal</td><td>3</td></tr>
+<tr><td>specialized.oddball.erp.p300_difference_peak_latency_ms</td><td>ms</td><td>304</td><td>20</td><td>288</td><td>-0.8</td><td></td><td>Within range</td><td>3</td></tr>
+""" + ''.join(f"<tr><td>shared.channel.{ch}.theta_relative</td><td>ratio</td><td>0.030</td><td>0.001</td><td>{v}</td><td>{z}</td><td></td><td>{s}</td><td>3</td></tr>"
+             for ch, v, z, s in [('Fz', '0.034', '4.0', 'Abnormal'), ('F3', '0.032', '2.0', 'Within range'),
+                                 ('F4', '0.032', '2.0', 'Within range'), ('Pz', '0.031', '1.0', 'Within range')]) + """
+<tr><td>shared.channel.Fz.rms</td><td>V</td><td>1e-05</td><td>1e-08</td><td>1.01e-05</td><td>10</td><td></td><td>Abnormal</td><td>3</td></tr>
+<tr><td>shared.channel.Fz.dominant_frequency</td><td>Hz</td><td>10</td><td>0</td><td>10</td><td>N/A</td><td></td><td>Not comparable</td><td>3</td></tr>
+</table></body></html>"""
+
+
+def test_evidence_reads_direction_size_and_meaning_from_the_report():
+    from backend import ai_analysis, report_evidence
+    ev = report_evidence.build_evidence(ai_analysis.extract_report(COMPARISON)['text'])
+    assert ev['report_type'] == 'baseline_comparison'
+    comp = ev['comparisons'][0]
+    assert (comp['metrics_compared'], comp['not_comparable'], comp['flagged_elevated'], comp['flagged_low']) == (8, 1, 2, 1)
+    assert comp['expected_flag_rate_by_chance'] == pytest.approx(0.1217, abs=1e-3)  # t with 2 df, not 0.27 %
+    facts = {f['metric']: f for f in ev['facts']}
+    p300 = facts['specialized.oddball.erp.p300_difference_peak_uv']
+    assert (p300['kind'], p300['direction'], p300['family'], p300['z']) == ('flagged_change', 'down', 'p300_amplitude', -13.3)
+    assert p300['pct_change'] == pytest.approx(-12.12, abs=0.01)
+    assert facts['specialized.oddball.erp.p300_difference_peak_latency_ms']['kind'] == 'baseline_comparison'
+    pattern = facts['shared.channel.*.theta_relative']
+    assert (pattern['channels'], pattern['channels_up'], pattern['channels_flagged'], pattern['median_z']) == (4, 4, 1, 2.0)
+    assert facts['shared.channel.Fz.rms']['kind'] == 'flagged_signal_descriptor'
+    assert 'smaller P300' in ev['metric_effects']['p300_amplitude']['down']
+    assert 'Polich2007' in ev['references'] and 'Meeusen2013' in ev['references']
+    assert [f['id'] for f in ev['facts']] == [f'E{i}' for i in range(1, len(ev['facts']) + 1)]
+
+
+def test_instructions_require_cited_facts_and_direction_meaning():
+    from backend import ai_analysis
+    text = ai_analysis.SYSTEM_PROMPT
+    assert 'must cite the fact ids' in text and 'Not assessable from this report' in text
+    assert 'Flagged metrics: direction and meaning' in text
+    assert 'A smaller P300 has been associated with fatigue' in text and '{effects}' not in text
+
+
+def test_request_carries_evidence_and_mock_cites_it(tmp_path, monkeypatch):
+    from backend import ai_analysis
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+    import mock_ai_api
+    extracted = ai_analysis.extract_report(COMPARISON)
+    payload = ai_analysis.build_request(COMPARISON, extracted, {'label': 'test'})
+    assert payload['report']['evidence']['facts'][0]['metric'] == 'specialized.oddball.erp.p300_difference_peak_uv'
+    md = mock_ai_api.placeholder_analysis(payload)
+    assert 'PLACEHOLDER RESPONSE' in md and 'No AI model' in md
+    assert '| E1 | oddball p300_difference_peak_uv | 13.2 -> 11.6' in md
+    assert 'smaller P300 than baseline [E1]' in md
+    assert 'all channels: theta_relative up in 4 of 4 channels' in md
