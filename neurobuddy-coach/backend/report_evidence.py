@@ -24,7 +24,7 @@ from collections import defaultdict
 
 EVIDENCE_SCHEMA = 'neurobuddy.report-evidence/0.1'
 Z_THRESHOLD = 3.0
-MAX_FACTS = 160
+MAX_FACTS = 1200
 FRONTAL = {'Fz', 'F3', 'F4', 'Fp1', 'Fp2', 'F7', 'F8'}
 
 REFERENCES = {
@@ -37,101 +37,93 @@ REFERENCES = {
     'Klimesch1999': 'Klimesch W. (1999). EEG alpha and theta oscillations reflect cognitive and memory performance: a review and analysis. Brain Research Reviews, 29(2-3), 169-195.',
     'Barry2007': 'Barry R.J., Clarke A.R., Johnstone S.J., Magee C.A., Rushby J.A. (2007). EEG differences between eyes-closed and eyes-open resting conditions. Clinical Neurophysiology, 118(12), 2765-2773.',
     'AlShargie2016': 'Al-Shargie F., Kiguchi M., Badruddin N., et al. (2016). Mental stress assessment using simultaneous measurement of EEG and fNIRS. Biomedical Optics Express, 7(10), 3882-3898.',
-    'Meeusen2013': 'Meeusen R., Duclos M., Foster C., et al. (2013). Prevention, diagnosis, and treatment of the overtraining syndrome: joint consensus statement of the ECSS and the ACSM. Medicine & Science in Sports & Exercise, 45(1), 186-205.',
 }
 
-# For each metric family: what a rise or a drop has been associated with, and which
-# direction is consistent with each state. These are non-specific group-level
-# findings, not markers for an individual.
+# What the athlete-level areas are, in the order the analysis reports them.
+AREAS = [('recovery', 'Recovery'), ('fatigue', 'Fatigue'), ('sleep', 'Sleep'),
+         ('stress', 'Stress / arousal'), ('attention', 'Attention / alertness')]
+
+# For each metric family: what a rise or a drop MAY be related to, and which direction lines up
+# with each area. These are group-level research findings, not signs for an individual.
 METRIC_EFFECTS = {
     'theta': {
         'label': 'Theta power (4-8 Hz)',
-        'up': 'Higher waking theta, especially frontal, has been associated with time awake, sleepiness and mental fatigue.',
-        'down': 'Lower theta has no specific state association; it can follow better alertness or simply recording differences.',
-        'consistent_with': {'fatigue': 'up', 'sleepiness': 'up'},
+        'up': 'Higher theta, especially frontal, may be related to mental fatigue, longer time awake or sleepiness.',
+        'down': 'Lower theta may be related to higher alertness.',
+        'consistent_with': {'fatigue': 'up', 'sleep': 'up', 'recovery': 'up', 'attention': 'up'},
         'refs': ['Cajochen1995', 'Finelli2000', 'Wascher2014', 'Craig2012'],
     },
     'alpha': {
         'label': 'Alpha power (8-13 Hz)',
-        'up': 'Higher alpha has been reported with fatigue and lower arousal (eyes-open data); in eyes-closed rest it is the normal relaxed state.',
-        'down': 'Lower alpha (alpha blocking) accompanies higher arousal, attention or stress, and also opening the eyes or drowsy alpha drop-out.',
-        'consistent_with': {'fatigue': 'up', 'stress': 'down'},
+        'up': 'Higher alpha may be related to fatigue, relaxation or lower arousal.',
+        'down': 'Lower alpha may be related to higher arousal, focused attention or stress.',
+        'consistent_with': {'fatigue': 'up', 'recovery': 'up', 'stress': 'down'},
         'refs': ['Craig2012', 'Barry2007', 'AlShargie2016'],
     },
     'beta': {
         'label': 'Beta power (13-30 Hz)',
-        'up': 'Higher beta has been associated with arousal, mental stress and effort; muscle tension also raises beta and is a common confound.',
-        'down': 'Lower beta has been reported with drowsiness and reduced vigilance.',
-        'consistent_with': {'stress': 'up', 'sleepiness': 'down'},
+        'up': 'Higher beta may be related to arousal, mental stress, effort or muscle tension.',
+        'down': 'Lower beta may be related to drowsiness or reduced vigilance.',
+        'consistent_with': {'stress': 'up', 'sleep': 'down', 'attention': 'down'},
         'refs': ['AlShargie2016', 'Craig2012'],
     },
     'delta': {
-        'label': 'Delta power (1-4 Hz) in waking EEG',
-        'up': 'Higher waking delta can reflect drowsiness or sleep pressure, but eye movement and movement artifact also land in this band.',
-        'down': 'Lower delta has no specific state association.',
-        'consistent_with': {'sleepiness': 'up'},
+        'label': 'Delta power (1-4 Hz) while awake',
+        'up': 'Higher waking delta may be related to drowsiness or sleep pressure, or to eye and movement activity.',
+        'down': 'Lower waking delta may be related to higher alertness.',
+        'consistent_with': {'sleep': 'up'},
         'refs': ['Cajochen1995'],
     },
     'peak_alpha_frequency': {
         'label': 'Peak alpha frequency',
-        'up': 'A faster alpha peak has been linked with better cognitive readiness.',
-        'down': 'A slower alpha peak has been associated with fatigue, sleepiness and lower cognitive performance.',
-        'consistent_with': {'fatigue': 'down', 'sleepiness': 'down'},
+        'up': 'A faster alpha peak may be related to better cognitive readiness.',
+        'down': 'A slower alpha peak may be related to fatigue, sleepiness or lower cognitive performance.',
+        'consistent_with': {'fatigue': 'down', 'sleep': 'down', 'recovery': 'down', 'attention': 'down'},
         'refs': ['Klimesch1999'],
     },
     'alpha_theta_ratio': {
         'label': 'Alpha/theta ratio',
-        'up': 'More alpha relative to theta points away from the theta-dominant pattern seen with sleepiness.',
-        'down': 'A falling alpha/theta ratio (relatively more theta) is consistent with sleepiness or fatigue.',
-        'consistent_with': {'fatigue': 'down', 'sleepiness': 'down'},
+        'up': 'A higher alpha/theta ratio may be related to a more alert, less theta-dominant state.',
+        'down': 'A lower alpha/theta ratio (relatively more theta) may be related to sleepiness or fatigue.',
+        'consistent_with': {'fatigue': 'down', 'sleep': 'down', 'recovery': 'down'},
         'refs': ['Klimesch1999', 'Cajochen1995'],
-    },
-    'theta_delta_ratio': {
-        'label': 'Theta/delta ratio',
-        'up': 'No established state association on its own.',
-        'down': 'No established state association on its own.',
-        'consistent_with': {},
-        'refs': [],
     },
     'beta_alpha_ratio': {
         'label': 'Beta/alpha ratio',
-        'up': 'A rising beta/alpha ratio is consistent with higher arousal or stress.',
-        'down': 'A falling beta/alpha ratio is consistent with lower arousal, relaxation or fatigue.',
-        'consistent_with': {'stress': 'up', 'fatigue': 'down'},
+        'up': 'A higher beta/alpha ratio may be related to higher arousal or stress.',
+        'down': 'A lower beta/alpha ratio may be related to lower arousal, relaxation or fatigue.',
+        'consistent_with': {'stress': 'up', 'fatigue': 'down', 'recovery': 'down'},
         'refs': ['AlShargie2016', 'Craig2012'],
     },
     'beta_theta_ratio': {
         'label': 'Beta/theta ratio',
-        'up': 'A rising beta/theta ratio is consistent with higher arousal.',
-        'down': 'A falling beta/theta ratio (relatively more theta) is consistent with reduced vigilance or fatigue.',
-        'consistent_with': {'stress': 'up', 'fatigue': 'down', 'sleepiness': 'down'},
+        'up': 'A higher beta/theta ratio may be related to higher arousal.',
+        'down': 'A lower beta/theta ratio (relatively more theta) may be related to reduced vigilance or fatigue.',
+        'consistent_with': {'stress': 'up', 'fatigue': 'down', 'sleep': 'down', 'attention': 'down'},
         'refs': ['Craig2012', 'Cajochen1995'],
     },
     'p300_amplitude': {
         'label': 'P300 amplitude (target minus standard)',
-        'up': 'A larger P300 is usually read as more attentional resources allocated to the target.',
-        'down': 'A smaller P300 has been associated with fatigue, sleep loss and reduced attention.',
-        'consistent_with': {'fatigue': 'down', 'sleepiness': 'down'},
+        'up': 'A larger P300 may be related to more attention given to the target.',
+        'down': 'A smaller P300 may be related to fatigue, sleep loss or reduced attention.',
+        'consistent_with': {'fatigue': 'down', 'sleep': 'down', 'recovery': 'down', 'attention': 'down'},
         'refs': ['Polich2007', 'Kok2001'],
     },
     'p300_latency': {
         'label': 'P300 peak latency',
-        'up': 'A later P300 has been associated with slower stimulus evaluation, as seen with fatigue or sleep loss.',
-        'down': 'An earlier P300 is usually read as faster stimulus evaluation.',
-        'consistent_with': {'fatigue': 'up', 'sleepiness': 'up'},
+        'up': 'A later P300 may be related to slower processing, as seen with fatigue or sleep loss.',
+        'down': 'An earlier P300 may be related to faster processing.',
+        'consistent_with': {'fatigue': 'up', 'sleep': 'up', 'recovery': 'up', 'attention': 'up'},
         'refs': ['Polich2007'],
     },
     'signal': {
-        'label': 'Amplitude and waveform descriptors (RMS, variance, kurtosis, peak-to-peak and similar)',
-        'up': 'Mostly reflect recording conditions (impedance, movement, muscle, gain), not a training state.',
-        'down': 'Mostly reflect recording conditions, not a training state.',
+        'label': 'Amplitude and waveform measures (RMS, variance, kurtosis, peak-to-peak and similar)',
+        'up': 'Changes may be related to recording conditions such as electrode contact, movement or muscle tension.',
+        'down': 'Changes may be related to recording conditions such as electrode contact, movement or muscle tension.',
         'consistent_with': {},
         'refs': [],
     },
 }
-OVERTRAINING_NOTE = ('There is no established EEG signature of overtraining. Its diagnosis rests on a sustained performance '
-                     'decrement with other causes excluded, so EEG changes can at most be consistent with under-recovery.')
-OVERTRAINING_REFS = ['Meeusen2013']
 
 
 def family(metric: str) -> str | None:
@@ -143,7 +135,9 @@ def family(metric: str) -> str | None:
         if 'uv' in m or 'µv' in m or 'amplitude' in m:
             return 'p300_amplitude'
         return None
-    for key in ('alpha_theta_ratio', 'theta_delta_ratio', 'beta_alpha_ratio', 'beta_theta_ratio', 'peak_alpha_frequency'):
+    if 'theta_delta_ratio' in m:
+        return None
+    for key in ('alpha_theta_ratio', 'beta_alpha_ratio', 'beta_theta_ratio', 'peak_alpha_frequency'):
         if key in m:
             return key
     for band in ('theta', 'alpha', 'beta', 'delta'):
@@ -258,8 +252,9 @@ class _Facts:
         return fact['id']
 
 
-def _comparison(table: dict, facts: _Facts, out: dict) -> None:
-    head = [h.lower() for h in table['header']]
+def _comparison(table: dict, facts: _Facts, out: dict, baseline_values: dict | None = None) -> None:
+    """Every metric in a baseline vs testing table, split into outside and within +/-3 SD."""
+    head = [h.lower().replace('_', ' ') for h in table['header']]
     col = {name: head.index(name) for name in head}
 
     def get(row, name):
@@ -272,77 +267,78 @@ def _comparison(table: dict, facts: _Facts, out: dict) -> None:
         if not metric:
             continue
         mean, test, z = _num(get(row, 'baseline mean')), _num(get(row, 'test value')), _num(get(row, 'z score'))
-        status = get(row, 'status') or ''
         direction = None
         if mean is not None and test is not None:
             direction = 'up' if test > mean else 'down' if test < mean else 'unchanged'
         item = {'metric': metric, 'unit': get(row, 'unit') or None, 'baseline_mean': mean,
-                'baseline_sd': _num(get(row, 'baseline sd')), 'test_value': test, 'z': z, 'status': status,
-                'direction': direction, 'baseline_n': _num(get(row, 'baseline n')), 'family': family(metric)}
+                'baseline_sd': _num(get(row, 'baseline sd')), 'test_value': test, 'z': z,
+                'status': get(row, 'status') or '', 'direction': direction,
+                'baseline_n': _num(get(row, 'baseline n')), 'family': family(metric)}
         rows.append(item)
         channel = re.match(r'(.*?\.channel\.)([^.]+)\.(.+)$', metric)
-        key = (channel.group(1) + '*.' + channel.group(3)) if channel else None
-        if key and item['family'] and item['family'] != 'signal' and z is not None:
-            groups[key].append((channel.group(2), item))
+        if channel and z is not None:
+            groups[channel.group(1) + '*.' + channel.group(3)].append((channel.group(2), item))
 
     signature = tuple((r['metric'], r['test_value'], r['z']) for r in rows)
     if signature in out['seen']:
         return
     out['seen'].add(signature)
-    flagged = [r for r in rows if r['z'] is not None and abs(r['z']) > Z_THRESHOLD]
+    outside = [r for r in rows if r['z'] is not None and abs(r['z']) > Z_THRESHOLD]
+    z_scored = sum(r['z'] is not None for r in rows)
     n_values = {int(r['baseline_n']) for r in rows if r['baseline_n']}
+    rate = chance_flag_rate(min(n_values)) if n_values else None
     out['comparisons'].append({
-        'source': _source(table), 'metrics_compared': len(rows),
-        'z_scored': sum(r['z'] is not None for r in rows),
-        'not_comparable': sum(r['z'] is None for r in rows),
-        'flagged_elevated': sum(r['z'] > Z_THRESHOLD for r in flagged),
-        'flagged_low': sum(r['z'] < -Z_THRESHOLD for r in flagged),
-        'flagged_interpretable': sum(bool(r['family']) and r['family'] != 'signal' for r in flagged),
+        'source': _source(table), 'metrics_compared': len(rows), 'z_scored': z_scored,
+        'not_comparable': len(rows) - z_scored,
+        'above_3sd': sum(r['z'] > Z_THRESHOLD for r in outside),
+        'below_3sd': sum(r['z'] < -Z_THRESHOLD for r in outside),
+        'within_3sd': z_scored - len(outside),
+        'outside_interpreted': sum(r['family'] in METRIC_EFFECTS and r['family'] != 'signal' for r in outside),
         'baseline_n': sorted(n_values),
-        'expected_flag_rate_by_chance': chance_flag_rate(min(n_values)) if n_values else None,
-        'expected_flags_by_chance': (round(chance_flag_rate(min(n_values)) * sum(r['z'] is not None for r in rows))
-                                     if n_values and chance_flag_rate(min(n_values)) is not None else None),
+        'expected_outside_rate_by_chance': rate,
+        'expected_outside_by_chance': round(rate * z_scored) if rate is not None else None,
     })
 
     def add(kind, r):
+        position = None
+        if r['z'] is not None:
+            position = 'above +3 SD' if r['z'] > Z_THRESHOLD else 'below -3 SD' if r['z'] < -Z_THRESHOLD else 'within 3 SD'
         facts.add(kind=kind, source=_source(table), metric=r['metric'], family=r['family'], unit=r['unit'],
-                  baseline_mean=r['baseline_mean'], baseline_sd=r['baseline_sd'], value=r['test_value'], z=r['z'],
-                  pct_change=_pct(r['test_value'], r['baseline_mean']), status=r['status'], direction=r['direction'],
-                  baseline_n=r['baseline_n'])
+                  baseline_mean=r['baseline_mean'], baseline_sd=r['baseline_sd'],
+                  baseline_values=(baseline_values or {}).get(r['metric']), value=r['test_value'], z=r['z'],
+                  pct_change=_pct(r['test_value'], r['baseline_mean']), position=position,
+                  direction=r['direction'], baseline_n=r['baseline_n'])
 
-    by_z = sorted(flagged, key=lambda r: -abs(r['z']))
-    # 1. flagged metrics with a literature interpretation (EEG bands, ratios, P300)
+    by_z = sorted(outside, key=lambda r: -abs(r['z']))
+    interpreted = lambda r: r['family'] in METRIC_EFFECTS and r['family'] != 'signal'
+    # 1. outside +/-3 SD: EEG band, ratio and P300 metrics first, then every other metric
     for r in by_z:
-        if r['family'] and r['family'] != 'signal':
-            add('flagged_change', r)
-    # 2. P300 amplitude and latency are always reported, flagged or not
+        if interpreted(r):
+            add('outside_3sd', r)
+    for r in by_z:
+        if not interpreted(r):
+            add('outside_3sd_other', r)
+    # 2. P300 amplitude and latency inside +/-3 SD are listed one by one
     for r in rows:
-        if r['family'] in ('p300_amplitude', 'p300_latency') and r not in flagged:
-            add('baseline_comparison', r)
-    # 3. the same metric across channels: is the change consistent?
-    for key, members in sorted(groups.items()):
+        if r['family'] in ('p300_amplitude', 'p300_latency') and r not in outside and r['z'] is not None:
+            add('within_3sd', r)
+    # 3. each channel metric across the head: how many channels are within, above or below
+    for key, members in sorted(groups.items(), key=lambda kv: (not interpreted(kv[1][0][1]), kv[0])):
         zs = [m['z'] for _, m in members]
         if len(zs) < 2:
             continue
-        up, down = sum(z > 0 for z in zs), sum(z < 0 for z in zs)
-        top_ch, top = max(members, key=lambda cm: abs(cm[1]['z']))
-        frontal = [m['z'] for ch, m in members if ch in FRONTAL]
-        pcts = [p for p in (_pct(m['test_value'], m['baseline_mean']) for _, m in members) if p is not None]
-        mean_z = sum(zs) / len(zs)
         ordered = sorted(zs)
         mid = len(ordered) // 2
         median_z = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
-        facts.add(kind='channel_pattern', source=_source(table), metric=key, family=members[0][1]['family'],
-                  channels=len(zs), median_z=round(median_z, 2), mean_z=round(mean_z, 2), channels_up=up, channels_down=down,
-                  channels_flagged=sum(abs(z) > Z_THRESHOLD for z in zs),
-                  mean_pct_change=round(sum(pcts) / len(pcts), 2) if pcts else None,
+        inside = [z for z in zs if abs(z) <= Z_THRESHOLD]
+        frontal = [m['z'] for ch, m in members if ch in FRONTAL]
+        facts.add(kind='channel_summary', source=_source(table), metric=key, family=members[0][1]['family'],
+                  channels=len(zs), channels_within=len(inside),
+                  channels_above=sum(z > Z_THRESHOLD for z in zs), channels_below=sum(z < -Z_THRESHOLD for z in zs),
+                  channels_up=sum(z > 0 for z in zs), channels_down=sum(z < 0 for z in zs),
+                  median_z=round(median_z, 2), within_z_range=f'{min(inside):.2f} to {max(inside):.2f}' if inside else None,
                   direction='up' if median_z > 0 else 'down' if median_z < 0 else 'unchanged',
-                  frontal_mean_z=round(sum(frontal) / len(frontal), 2) if frontal else None,
-                  largest=f'{top_ch} z={top["z"]:.2f}')
-    # 4. flagged amplitude, waveform and quality descriptors: the largest few only
-    other = [r for r in by_z if not r['family'] or r['family'] == 'signal']
-    for r in other[:12]:
-        add('flagged_signal_descriptor', r)
+                  frontal_median_z=round(sorted(frontal)[len(frontal) // 2], 2) if frontal else None)
 
 
 def _statistics(table: dict, facts: _Facts, seen: set) -> None:
@@ -418,15 +414,17 @@ def _quality(table: dict, facts: _Facts) -> None:
                   family=None)
 
 
-def build_evidence(text: str, figures: list[dict] | None = None) -> dict:
+def build_evidence(text: str = '', figures: list[dict] | None = None, tables: list[dict] | None = None,
+                   baseline_values: dict | None = None) -> dict:
+    """Evidence from report text (HTML reports) and/or ready-made tables (structured job files)."""
     facts = _Facts()
     out = {'comparisons': [], 'seen': set()}
     seen: set = set()
-    tables = parse_tables(text)
+    tables = list(tables or []) + parse_tables(text)
     for table in tables:
-        head = [h.lower() for h in table['header']]
+        head = [h.lower().replace('_', ' ') for h in table['header']]
         if 'z score' in head and 'metric' in head:
-            _comparison(table, facts, out)
+            _comparison(table, facts, out, baseline_values)
     for table in tables:
         head = [h.lower() for h in table['header']]
         if head[:2] in (['statistic', 'value'], ['metric', 'value']):
@@ -437,19 +435,19 @@ def build_evidence(text: str, figures: list[dict] | None = None) -> dict:
             _erp(table, facts)
         elif 'quality_grade' in head or 'review_recommended' in head:
             _quality(table, facts)
-    families = sorted({f['family'] for f in facts.items if f.get('family')})
-    refs = sorted({r for fam in families for r in METRIC_EFFECTS[fam]['refs']} | set(OVERTRAINING_REFS))
+    families = sorted({f['family'] for f in facts.items if f.get('family') in METRIC_EFFECTS})
+    refs = sorted({r for fam in families for r in METRIC_EFFECTS[fam]['refs']})
     return {
         'schema_version': EVIDENCE_SCHEMA,
         'report_type': 'baseline_comparison' if out['comparisons'] else 'single_recording',
-        'recording': _recording(text),
+        'recording': _recording(text) if text else {},
         'z_threshold': Z_THRESHOLD,
         'comparisons': out['comparisons'],
         'facts': facts.items,
         'facts_not_included': facts.dropped,
         'figures': [{'index': f['index'], 'caption': f['caption']} for f in (figures or [])],
+        'areas': [{'key': k, 'label': v} for k, v in AREAS],
         'metric_effects': {fam: METRIC_EFFECTS[fam] for fam in families},
-        'overtraining_note': OVERTRAINING_NOTE,
         'references': {key: REFERENCES[key] for key in refs},
     }
 
@@ -460,5 +458,4 @@ def effects_table_text() -> str:
     for fam, e in METRIC_EFFECTS.items():
         refs = ', '.join(e['refs']) or 'no specific reference'
         lines.append(f'- {e["label"]}: UP: {e["up"]} DOWN: {e["down"]} ({refs})')
-    lines.append(f'- Overtraining: {OVERTRAINING_NOTE} (Meeusen2013)')
     return '\n'.join(lines)

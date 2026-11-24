@@ -144,7 +144,7 @@ def test_job_report_is_sent_to_the_api_and_saved(tmp_path, monkeypatch, fake_api
     assert sent['headers']['authorization'] == 'Bearer secret-key'
     body = sent['body']
     assert body['schema_version'] == 'neurobuddy.ai-analysis-request/0.1'
-    for topic in ('overtraining', 'stress', 'fatigue', 'sleep deprivation'):
+    for topic in ('recovery', 'fatigue', 'sleep', 'stress', 'attention'):
         assert topic in body['instructions'].lower()
     assert body['report']['html'] == REPORT
     assert '| p300_difference_peak_uv | 11.6' in body['report']['text']
@@ -223,35 +223,42 @@ COMPARISON = """<html><head><title>Neuro-buddy Athlete Comparative Report</title
 </table></body></html>"""
 
 
-def test_evidence_reads_direction_size_and_meaning_from_the_report():
+def test_evidence_splits_outside_and_within_3sd_with_z_scores():
     from backend import ai_analysis, report_evidence
     ev = report_evidence.build_evidence(ai_analysis.extract_report(COMPARISON)['text'])
     assert ev['report_type'] == 'baseline_comparison'
     comp = ev['comparisons'][0]
-    assert (comp['metrics_compared'], comp['not_comparable'], comp['flagged_elevated'], comp['flagged_low']) == (8, 1, 2, 1)
-    assert comp['expected_flag_rate_by_chance'] == pytest.approx(0.1217, abs=1e-3)  # t with 2 df, not 0.27 %
+    assert (comp['metrics_compared'], comp['not_comparable'], comp['above_3sd'], comp['below_3sd'], comp['within_3sd']) == (8, 1, 2, 1, 4)
+    assert comp['expected_outside_rate_by_chance'] == pytest.approx(0.1217, abs=1e-3)  # t with 2 df, not 0.27 %
     facts = {f['metric']: f for f in ev['facts']}
     p300 = facts['specialized.oddball.erp.p300_difference_peak_uv']
-    assert (p300['kind'], p300['direction'], p300['family'], p300['z']) == ('flagged_change', 'down', 'p300_amplitude', -13.3)
+    assert (p300['kind'], p300['position'], p300['direction'], p300['family'], p300['z']) == ('outside_3sd', 'below -3 SD', 'down', 'p300_amplitude', -13.3)
     assert p300['pct_change'] == pytest.approx(-12.12, abs=0.01)
-    assert facts['specialized.oddball.erp.p300_difference_peak_latency_ms']['kind'] == 'baseline_comparison'
-    pattern = facts['shared.channel.*.theta_relative']
-    assert (pattern['channels'], pattern['channels_up'], pattern['channels_flagged'], pattern['median_z']) == (4, 4, 1, 2.0)
-    assert facts['shared.channel.Fz.rms']['kind'] == 'flagged_signal_descriptor'
-    assert 'smaller P300' in ev['metric_effects']['p300_amplitude']['down']
-    assert 'Polich2007' in ev['references'] and 'Meeusen2013' in ev['references']
+    latency = facts['specialized.oddball.erp.p300_difference_peak_latency_ms']
+    assert (latency['kind'], latency['position']) == ('within_3sd', 'within 3 SD')
+    assert facts['shared.channel.Fz.theta_relative']['position'] == 'above +3 SD'
+    summary = facts['shared.channel.*.theta_relative']
+    assert (summary['kind'], summary['channels'], summary['channels_within'], summary['channels_above'], summary['median_z']) == ('channel_summary', 4, 3, 1, 2.0)
+    assert facts['shared.channel.Fz.rms']['kind'] == 'outside_3sd_other'
+    assert 'may be related to fatigue' in ev['metric_effects']['p300_amplitude']['down']
+    assert [a['key'] for a in ev['areas']] == ['recovery', 'fatigue', 'sleep', 'stress', 'attention']
     assert [f['id'] for f in ev['facts']] == [f'E{i}' for i in range(1, len(ev['facts']) + 1)]
 
 
-def test_instructions_require_cited_facts_and_direction_meaning():
+def test_instructions_ask_for_two_sections_z_scores_and_may_be_related_to():
     from backend import ai_analysis
     text = ai_analysis.SYSTEM_PROMPT
-    assert 'must cite the fact ids' in text and 'Not assessable from this report' in text
-    assert 'Flagged metrics: direction and meaning' in text
-    assert 'A smaller P300 has been associated with fatigue' in text and '{effects}' not in text
+    assert '## Outside ±3 SD (elevated or low)' in text and '## Within ±3 SD (normal)' in text
+    assert 'Always give the z-score' in text and 'may be related to' in text
+    assert 'Do not write about what the metrics cannot show' in text
+    for area in ('### Recovery', '### Fatigue', '### Sleep', '### Stress / arousal', '### Attention / alertness'):
+        assert area in text
+    assert 'Not assessable' not in text and 'overtraining' not in text.lower() and '{effects}' not in text
+    for effect in __import__('backend.report_evidence', fromlist=['x']).METRIC_EFFECTS.values():
+        assert 'cannot' not in (effect['up'] + effect['down']) and 'no established' not in (effect['up'] + effect['down']).lower()
 
 
-def test_request_carries_evidence_and_mock_cites_it(tmp_path, monkeypatch):
+def test_request_carries_evidence_and_mock_writes_both_sections():
     from backend import ai_analysis
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
     import mock_ai_api
@@ -260,6 +267,67 @@ def test_request_carries_evidence_and_mock_cites_it(tmp_path, monkeypatch):
     assert payload['report']['evidence']['facts'][0]['metric'] == 'specialized.oddball.erp.p300_difference_peak_uv'
     md = mock_ai_api.placeholder_analysis(payload)
     assert 'PLACEHOLDER RESPONSE' in md and 'No AI model' in md
-    assert '| E1 | oddball p300_difference_peak_uv | 13.2 -> 11.6' in md
-    assert 'smaller P300 than baseline [E1]' in md
-    assert 'all channels: theta_relative up in 4 of 4 channels' in md
+    assert '## Outside ±3 SD (elevated or low)' in md and '## Within ±3 SD (normal)' in md
+    assert '| E1 | oddball p300 difference peak uv | 13.2 ± 0.12 | 11.6 | **-13.30** below | fatigue, sleep loss or reduced attention |' in md
+    assert 'all channels: theta relative | 3 of 4' in md
+    assert 'cannot' not in md and 'Not assessable' not in md
+
+
+LONGITUDINAL = {'task_subtype': 'oddball', 'baseline_recording_count': 3, 'method': 'mean and sample SD',
+                'metrics': [{'metric': 'specialized.oddball.erp.p300_difference_peak_uv', 'baseline_values': [13.1, 13.2, 13.3]}]}
+CSV_HEADER = 'metric,unit,baseline_mean,baseline_sd,test_value,z_score,flag,status,baseline_n,lower_bound,upper_bound,cv_percent,reason\n'
+
+
+def boot_athlete(tmp_path, monkeypatch, url):
+    client, app, job_id = boot(tmp_path, monkeypatch, url=url)
+    with app.database() as db:
+        db.execute("UPDATE jobs SET mode='athlete' WHERE id=?", (job_id,))
+        athlete_id, team_id = db.execute('SELECT athlete_id, team_id FROM jobs WHERE id=?', (job_id,)).fetchone()
+    folder = app.REPORTS / job_id
+    (folder / 'comparative_analysis.csv').write_text(CSV_HEADER +
+        'specialized.oddball.erp.p300_difference_peak_uv,µV,13.2,0.1,11.6,-16,,Abnormal,3,,,,\n'
+        'shared.channel.Fz.theta_relative,ratio,0.03,0.001,0.031,1.0,,Within range,3,,,,\n'
+        'shared.channel.Pz.theta_relative,ratio,0.03,0.001,0.0305,0.5,,Within range,3,,,,\n', encoding='utf-8')
+    (folder / 'baseline').mkdir()
+    (folder / 'baseline' / 'longitudinal.json').write_text(json.dumps(LONGITUDINAL), encoding='utf-8')
+    return client, athlete_id, team_id
+
+
+def test_dropped_athlete_sends_baselines_and_testing_comparison(tmp_path, monkeypatch, fake_api):
+    client, athlete_id, team_id = boot_athlete(tmp_path, monkeypatch, fake_api)
+    assert client.get('/api/v2/ai-analysis/subject', params={'type': 'athlete', 'id': athlete_id}).json() == {'saved': False}
+    response = client.post('/api/v2/ai-analysis/subject', json={'type': 'athlete', 'id': athlete_id})
+    assert response.status_code == 200, response.text
+    assert response.json()['source']['label'] == 'Athlete Rivera (athlete)'
+    subject = FakeAPI.requests[-1]['body']['subject']
+    assert subject['type'] == 'athlete' and subject['team_name'] == 'Atlas Sprint Lab'
+    ev = subject['athletes'][0]['evidence']
+    p300 = ev['facts'][0]
+    assert (p300['z'], p300['position'], p300['baseline_values']) == (-16.0, 'below -3 SD', [13.1, 13.2, 13.3])
+    assert ev['recording']['baseline_sessions'] == 3
+    assert ev['comparisons'][0]['within_3sd'] == 2
+    assert client.get('/api/v2/ai-analysis/subject', params={'type': 'athlete', 'id': athlete_id}).json()['saved'] is True
+
+    team = client.post('/api/v2/ai-analysis/subject', json={'type': 'team', 'id': team_id})
+    assert team.status_code == 200
+    assert [a['athlete_name'] for a in FakeAPI.requests[-1]['body']['subject']['athletes']] == ['Athlete Rivera']
+
+
+def test_subject_without_comparison_is_reported(tmp_path, monkeypatch, fake_api):
+    client, app, job_id = boot(tmp_path, monkeypatch, url=fake_api)
+    with app.database() as db:
+        athlete_id = db.execute('SELECT athlete_id FROM jobs WHERE id=?', (job_id,)).fetchone()[0]
+    response = client.post('/api/v2/ai-analysis/subject', json={'type': 'athlete', 'id': athlete_id})
+    assert response.status_code == 404 and 'baseline vs testing' in response.json()['detail']
+    assert FakeAPI.requests == []
+    assert client.post('/api/v2/ai-analysis/subject', json={'type': 'coach', 'id': athlete_id}).status_code == 422
+
+
+def test_mock_handles_a_team_subject(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+    import mock_ai_api
+    from backend import ai_analysis
+    ev = ai_analysis.report_evidence.build_evidence(ai_analysis.extract_report(COMPARISON)['text'])
+    md = mock_ai_api.placeholder_analysis({'subject': {'type': 'team', 'athletes': [
+        {'athlete_name': 'A One', 'evidence': ev}, {'athlete_name': 'B Two', 'evidence': ev}]}})
+    assert '# A One' in md and '# B Two' in md and '[B Two:E1]' in md

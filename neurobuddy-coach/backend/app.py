@@ -534,6 +534,77 @@ async def ai_analyze_upload(file: UploadFile = File(...)):
     return result
 
 
+class AISubjectRequest(BaseModel):
+    type: str = Field(pattern='^(athlete|team)$')
+    id: str = Field(min_length=36, max_length=36)
+
+
+def _athlete_comparison_folder(db, athlete_id: str, team_id: str) -> tuple[Path, str] | None:
+    """Latest completed baseline vs testing comparison for one athlete (own run or team batch)."""
+    jobs = db.execute("SELECT id,mode,athlete_id,team_id,result FROM jobs WHERE status='completed' ORDER BY created_at DESC").fetchall()
+    for job in jobs:
+        folder = None
+        if job['mode'] == 'athlete' and job['athlete_id'] == athlete_id:
+            folder = REPORTS / job['id']
+        elif job['mode'] == 'team' and job['team_id'] == team_id:
+            folder = REPORTS / job['id'] / 'athletes' / athlete_id
+        if folder is not None:
+            folder = folder.resolve()
+            if folder.is_relative_to(REPORTS.resolve()) and (folder / 'comparative_analysis.csv').is_file():
+                return folder, job['id']
+    return None
+
+
+def _subject(kind: str, subject_id: str) -> tuple[dict, dict]:
+    if not _REPORT_ID.fullmatch(subject_id):
+        raise HTTPException(422, 'Invalid id.')
+    with database() as db:
+        if kind == 'athlete':
+            athlete = dict(must_get(db, 'athletes', subject_id))
+            team = dict(must_get(db, 'teams', athlete['team_id']))
+            members = [athlete]
+        else:
+            team = dict(must_get(db, 'teams', subject_id))
+            members = [dict(r) for r in db.execute('SELECT * FROM athletes WHERE team_id=? ORDER BY name', (subject_id,))]
+        found = [(m, _athlete_comparison_folder(db, m['id'], team['id'])) for m in members]
+    athletes = []
+    for member, hit in found:
+        if not hit:
+            continue
+        evidence = ai_analysis.athlete_evidence(hit[0])
+        if evidence:
+            athletes.append({'athlete_name': member['name'], 'athlete_id': member['id'], 'job_id': hit[1], 'evidence': evidence})
+    label = f"{team['name']} (team, {len(athletes)} athlete(s))" if kind == 'team' else f"{members[0]['name']} (athlete)"
+    subject = {'type': kind, 'team_name': team['name'], 'athletes': athletes,
+               'athletes_without_comparison': [m['name'] for m, hit in found if not hit]}
+    return subject, {'kind': kind, 'id': subject_id, 'label': label, 'team_name': team['name']}
+
+
+def _subject_result_path(kind: str, subject_id: str) -> Path:
+    return STORAGE / 'ai_subjects' / f'{kind}_{subject_id}.json'
+
+
+@app.post('/api/v2/ai-analysis/subject')
+def ai_analyze_subject(body: AISubjectRequest):
+    subject, source = _subject(body.type, body.id)
+    try:
+        result = ai_analysis.analyze_subject(subject, source)
+    except Exception as exc:
+        raise _ai_error(exc) from exc
+    ai_analysis.save_result(_subject_result_path(body.type, body.id), result)
+    return result
+
+
+@app.get('/api/v2/ai-analysis/subject')
+def ai_saved_subject(type: str = Query(..., pattern='^(athlete|team)$'), id: str = Query(..., min_length=36, max_length=36)):
+    if not _REPORT_ID.fullmatch(id):
+        raise HTTPException(422, 'Invalid id.')
+    saved = _subject_result_path(type, id)
+    if not saved.is_file():
+        return {'saved': False}
+    return {'saved': True, **json.loads(saved.read_text(encoding='utf-8'))}
+
+
 # Central Dataset Library is itself the repository. No separate EEG Collection app.
 from . import shelves as _shelves
 _shelves.install(app, __import__(__name__, fromlist=['*']))

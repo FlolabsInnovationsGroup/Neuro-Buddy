@@ -369,7 +369,7 @@
     const report=e.target.closest('[data-ai-path]');
     if(report){safe(()=>selectAIReport({kind:'job',job_id:report.dataset.aiJob,path:report.dataset.aiPath,label:report.dataset.aiLabel}));return;}
     const b=e.target.closest('[data-advanced-type]');
-    if(b){state.aiReport=null;renderAIControls();safe(()=>chooseAdvanced(b.dataset.advancedType,b.dataset.advancedId));}
+    if(b){safe(()=>selectAISubject(b.dataset.advancedType,b.dataset.advancedId));}
   });
   $('advanced-tree').addEventListener('dragstart',e=>{const r=e.target.closest('[data-ai-path]');if(r){e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('application/x-neurobuddy-report',JSON.stringify({job_id:r.dataset.aiJob,path:r.dataset.aiPath,label:r.dataset.aiLabel}));return;}const b=e.target.closest('[data-advanced-type]');if(b){e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('application/x-neurobuddy-advanced',JSON.stringify({type:b.dataset.advancedType,id:b.dataset.advancedId}));}});
   // ---------------------------------------------------------------- AI report analysis
@@ -386,9 +386,9 @@
     const configured=Boolean(state.aiStatus&&state.aiStatus.configured);
     button.disabled=state.aiBusy||!state.aiReport||!configured;
     button.textContent=state.aiBusy?'Analyzing report…':configured?'Process with AI':'Process with AI · Not configured';
-    button.title=!configured?'Set NEUROBUDDY_AI_API_URL on the computer running Coach, then restart it.':!state.aiReport?'Drop an HTML report first':'Send this report to the AI for analysis';
+    button.title=!configured?'Set NEUROBUDDY_AI_API_URL on the computer running Coach, then restart it.':!state.aiReport?'Drop an athlete, a team or an HTML report first':'Send this selection to the AI for analysis';
     if(state.aiStatus&&!configured)help.innerHTML='The AI analysis API is not connected yet. When FloLabs supplies it, set <code>NEUROBUDDY_AI_API_URL</code> (and <code>NEUROBUDDY_AI_API_KEY</code>) in the terminal that starts Coach, then restart it. You can still select reports and prepare JSON packages.';
-    else help.textContent=`The HTML report, its text and its figures are sent to the AI analysis API (${state.aiStatus?.endpoint_host||'external'}), which looks for EEG patterns associated with overtraining, stress, fatigue and sleep loss. Results are exploratory, not a diagnosis.`;
+    else help.textContent=`Drop an athlete or a team to send every baseline statistic and the testing comparison, or drop one HTML report. The AI analysis API (${state.aiStatus?.endpoint_host||'external'}) lists the metrics outside and within ±3 SD of baseline with their z-scores and what they may be related to (recovery, fatigue, sleep, stress, attention). Results are exploratory, not a diagnosis.`;
   }
   async function selectAIReport(report){
     state.aiReport=report;state.advancedSelection=null;
@@ -402,6 +402,21 @@
         if(state.aiReport===report&&saved.saved)showAIResult(saved,true);}
       catch{/* no saved analysis yet */}
     }
+  }
+  async function selectAISubject(type,id){
+    const team=state.advanced.teams.find(t=>t.id===id||t.athletes.some(a=>a.id===id));
+    const athlete=type==='athlete'&&team?team.athletes.find(a=>a.id===id):null;
+    const label=type==='team'?`${team?team.name:'Team'} (team, ${team?team.athletes.length:0} athlete(s))`:`${athlete?athlete.name:'Athlete'} (athlete)`;
+    const subject={kind:'subject',type,id,label};
+    state.aiReport=subject;
+    document.querySelectorAll('.ai-report-chip').forEach(b=>b.classList.remove('active'));
+    renderAIControls();
+    $('ai-result-panel').hidden=true;
+    await chooseAdvanced(type,id);
+    $('advanced-selection').textContent=`Selected ${label}: every baseline statistic and the testing session compared against it. Press Process with AI to analyze.`;
+    try{const saved=await api(`/v2/ai-analysis/subject?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+      if(state.aiReport===subject&&saved.saved)showAIResult(saved,true);}
+    catch{/* no saved analysis yet */}
   }
   function selectAIFile(file){
     if(!file)return;
@@ -435,12 +450,28 @@
     }
     flush();return out.join('');
   }
+  // Put the "Outside ±3 SD" and "Within ±3 SD" sections next to each other.
+  function pairSideBySide(root){
+    const headings=[...root.querySelectorAll('h2,h3,h4')];
+    const section=h=>{const level=Number(h.tagName[1]);const nodes=[h];let n=h.nextElementSibling;
+      while(n&&!(/^H[1-6]$/.test(n.tagName)&&Number(n.tagName[1])<=level)){nodes.push(n);n=n.nextElementSibling;}return nodes;};
+    headings.filter(h=>/^Outside\s*±\s*3\s*SD/i.test(h.textContent)).forEach(h=>{
+      const outside=section(h),last=outside[outside.length-1],next=last.nextElementSibling;
+      if(!next||!/^Within\s*±\s*3\s*SD/i.test(next.textContent)||next.tagName!==h.tagName)return;
+      const within=section(next),grid=document.createElement('div');grid.className='ai-columns';
+      h.before(grid);
+      for(const [nodes,cls] of [[outside,'ai-column outside'],[within,'ai-column within']]){
+        const col=document.createElement('div');col.className=cls;nodes.forEach(x=>col.appendChild(x));grid.appendChild(col);}
+    });
+  }
   function showAIResult(result,saved=false){
     state.aiResult=result;
-    $('ai-result-title').textContent=`AI report analysis · ${result.source?.label||'HTML report'}`;
+    $('ai-result-title').textContent=`AI analysis · ${result.source?.label||'HTML report'}`;
     const when=result.created_at?new Date(result.created_at).toLocaleString():'';
-    $('ai-result-meta').textContent=`${saved?'Saved analysis':'New analysis'} · ${result.model||''} · ${when} · ${result.figures_sent??0} figure(s) sent${result.truncated?' · Output was cut off at the length limit':''}`;
+    const sent=result.athletes_sent!=null?`${result.athletes_sent} athlete(s) sent`:`${result.figures_sent??0} figure(s) sent`;
+    $('ai-result-meta').textContent=`${saved?'Saved analysis':'New analysis'} · ${result.model||''} · ${when} · ${sent}${result.truncated?' · Output was cut off at the length limit':''}`;
     $('ai-result').innerHTML=renderMarkdown(result.analysis_markdown);
+    pairSideBySide($('ai-result'));
     $('ai-result-panel').hidden=false;
   }
   async function runAI(){
@@ -451,6 +482,7 @@
     try{
       let result;
       if(report.kind==='job')result=await api('/v2/ai-analysis/report',jsonOpt('POST',{job_id:report.job_id,path:report.path}));
+      else if(report.kind==='subject')result=await api('/v2/ai-analysis/subject',jsonOpt('POST',{type:report.type,id:report.id}));
       else{const form=new FormData();form.append('file',report.file,report.file.name);result=await api('/v2/ai-analysis/upload',{method:'POST',body:form});}
       showAIResult(result);
       $('advanced-selection').textContent=`AI analysis complete for ${report.label}.`;
@@ -469,7 +501,7 @@
     const report=e.dataTransfer.getData(REPORT_MIME),pkg=e.dataTransfer.getData('application/x-neurobuddy-advanced');
     try{
       if(report){e.preventDefault();const r=JSON.parse(report);safe(()=>selectAIReport({kind:'job',job_id:r.job_id,path:r.path,label:r.label}));return;}
-      if(pkg){e.preventDefault();const item=JSON.parse(pkg);state.aiReport=null;renderAIControls();safe(()=>chooseAdvanced(item.type,item.id));return;}
+      if(pkg){e.preventDefault();const item=JSON.parse(pkg);safe(()=>selectAISubject(item.type,item.id));return;}
       if(e.dataTransfer.files&&e.dataTransfer.files.length){e.preventDefault();selectAIFile(e.dataTransfer.files[0]);}
     }catch(err){notify(err.message,'error');}
   });
