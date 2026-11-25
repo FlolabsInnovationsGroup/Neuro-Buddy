@@ -229,7 +229,7 @@ def test_evidence_splits_outside_and_within_3sd_with_z_scores():
     assert ev['report_type'] == 'baseline_comparison'
     comp = ev['comparisons'][0]
     assert (comp['metrics_compared'], comp['not_comparable'], comp['above_3sd'], comp['below_3sd'], comp['within_3sd']) == (8, 1, 2, 1, 4)
-    assert comp['expected_outside_rate_by_chance'] == pytest.approx(0.1217, abs=1e-3)  # t with 2 df, not 0.27 %
+    assert 'expected_outside_by_chance' not in comp
     facts = {f['metric']: f for f in ev['facts']}
     p300 = facts['specialized.oddball.erp.p300_difference_peak_uv']
     assert (p300['kind'], p300['position'], p300['direction'], p300['family'], p300['z']) == ('outside_3sd', 'below -3 SD', 'down', 'p300_amplitude', -13.3)
@@ -270,7 +270,7 @@ def test_request_carries_evidence_and_mock_writes_both_sections():
     assert '## Outside ±3 SD (elevated or low)' in md and '## Within ±3 SD (normal)' in md
     assert '| E1 | oddball p300 difference peak uv | 13.2 ± 0.12 | 11.6 | **-13.30** below | fatigue, sleep loss or reduced attention |' in md
     assert 'all channels: theta relative | 3 of 4' in md
-    assert 'cannot' not in md and 'Not assessable' not in md
+    assert 'cannot' not in md and 'Not assessable' not in md and 'by chance' not in md
 
 
 LONGITUDINAL = {'task_subtype': 'oddball', 'baseline_recording_count': 3, 'method': 'mean and sample SD',

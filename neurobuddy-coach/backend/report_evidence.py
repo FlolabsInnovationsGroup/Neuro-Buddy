@@ -156,28 +156,6 @@ def _num(text):
     return value if math.isfinite(value) else None
 
 
-def chance_flag_rate(baseline_n: int, threshold: float = Z_THRESHOLD) -> float | None:
-    """Share of |z| > threshold expected by chance when z uses the sample SD of n baselines.
-
-    With x independent of the n baseline values, z / sqrt(1 + 1/n) follows Student's t
-    with n - 1 degrees of freedom, so small baselines flag far more than the 0.27 %
-    a known SD would give.
-    """
-    if not baseline_n or baseline_n < 2:
-        return None
-    df = baseline_n - 1
-    t = threshold / math.sqrt(1 + 1 / baseline_n)
-    const = math.exp(math.lgamma((df + 1) / 2) - math.lgamma(df / 2)) / math.sqrt(df * math.pi)
-    steps, upper = 20000, 60.0 + 40 * t
-    h = (upper - t) / steps
-    pdf = lambda x: const * (1 + x * x / df) ** (-(df + 1) / 2)
-    area = pdf(t) + pdf(upper) + sum((4 if i % 2 else 2) * pdf(t + i * h) for i in range(1, steps))
-    tail = area * h / 3
-    if df <= 2:  # heavy tail beyond the integration limit: P(T > u) for t with 1 or 2 df
-        tail += (0.5 - math.atan(upper) / math.pi) if df == 1 else 0.5 * (1 - upper / math.sqrt(upper * upper + 2))
-    return round(min(1.0, 2 * tail), 4)
-
-
 def _pct(test, mean):
     if test is None or mean is None or mean == 0:
         return None
@@ -286,7 +264,6 @@ def _comparison(table: dict, facts: _Facts, out: dict, baseline_values: dict | N
     outside = [r for r in rows if r['z'] is not None and abs(r['z']) > Z_THRESHOLD]
     z_scored = sum(r['z'] is not None for r in rows)
     n_values = {int(r['baseline_n']) for r in rows if r['baseline_n']}
-    rate = chance_flag_rate(min(n_values)) if n_values else None
     out['comparisons'].append({
         'source': _source(table), 'metrics_compared': len(rows), 'z_scored': z_scored,
         'not_comparable': len(rows) - z_scored,
@@ -295,8 +272,6 @@ def _comparison(table: dict, facts: _Facts, out: dict, baseline_values: dict | N
         'within_3sd': z_scored - len(outside),
         'outside_interpreted': sum(r['family'] in METRIC_EFFECTS and r['family'] != 'signal' for r in outside),
         'baseline_n': sorted(n_values),
-        'expected_outside_rate_by_chance': rate,
-        'expected_outside_by_chance': round(rate * z_scored) if rate is not None else None,
     })
 
     def add(kind, r):

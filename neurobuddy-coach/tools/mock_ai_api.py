@@ -103,11 +103,6 @@ def _comparison_sections(ev: dict, prefix: str = '') -> list[str]:
     context = []
     if rec:
         context.append('Recording: ' + ', '.join(f'{k} {v}' for k, v in rec.items()) + '.')
-    for c in comps:
-        if c.get('expected_outside_by_chance') is not None:
-            context.append(f"For reference, with {min(c['baseline_n'])} baseline sessions about {c['expected_outside_by_chance']} of "
-                           f"{c['z_scored']} metrics ({_n(100 * c['expected_outside_rate_by_chance'])}%) fall outside 3 SD by chance; "
-                           f"{c['above_3sd'] + c['below_3sd']} did here.")
 
     out_rows = []
     for f in outside:
