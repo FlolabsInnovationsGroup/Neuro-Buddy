@@ -5,9 +5,11 @@ repository and invokes the optimized Neurobuddy v0.7.1 scientific pipeline.
 """
 from __future__ import annotations
 
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hmac
 import json
 import os
 from pathlib import Path
@@ -90,6 +92,31 @@ with database() as db:
     ''')
 
 app = FastAPI(title='Neurobuddy Coach Baseline', version='0.2.1')
+
+# Optional shared-password gate for hosted deployments. When
+# NEUROBUDDY_ACCESS_PASSWORD is unset (the local default) nothing changes.
+# When set, every route except the health check needs HTTP Basic auth with
+# that password (any username), so athlete data is not public.
+_ACCESS_PASSWORD = os.environ.get('NEUROBUDDY_ACCESS_PASSWORD', '')
+_OPEN_PATHS = frozenset({'/api/v2/health'})
+
+
+@app.middleware('http')
+async def _access_gate(request, call_next):
+    if not _ACCESS_PASSWORD or request.url.path in _OPEN_PATHS:
+        return await call_next(request)
+    header = request.headers.get('authorization', '')
+    scheme, _, encoded = header.partition(' ')
+    if scheme.lower() == 'basic' and encoded:
+        try:
+            _, _, supplied = base64.b64decode(encoded, validate=True).decode('utf-8').partition(':')
+        except (ValueError, UnicodeDecodeError):
+            supplied = ''
+        if supplied and hmac.compare_digest(supplied.encode(), _ACCESS_PASSWORD.encode()):
+            return await call_next(request)
+    return Response('Neuro-Buddy Coach: password required.', status_code=401,
+                    headers={'WWW-Authenticate': 'Basic realm="Neuro-Buddy Coach", charset="UTF-8"'})
+
 app.mount('/v2', StaticFiles(directory=str(ROOT / 'v2')), name='v2')
 
 

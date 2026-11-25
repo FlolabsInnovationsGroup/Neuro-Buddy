@@ -113,3 +113,7 @@ See `docs/FRONTEND_IMPLEMENTATION_PLAN.md` for detailed phased Cursor milestones
 - **Shelf controls:** Removed the redundant `Select Shelf` button from the shelf footer. The shelf header's **Open** and gear controls still select shelves. Drag / Test EEG, add-file slots, task classification, and deletion are preserved.
 - **Analysis:** Removed the re-created, truncated JSON metric/figure preview. Each completed single EEG run links directly to its real `report.html`; each longitudinal run links to `athlete_report.html` and to its individual baseline/test HTML reports, with original ZIP/CSV/JSON downloads; team batches link to each completed athlete's HTML report. The scientific reports and backend artifact-serving endpoint are unchanged.
 - **Scope:** No scientific engine modules, SQLite schema or API endpoints were changed in v0.3.1. The central three-tab layout, uploads of companion/event files, longitudinal strict compatibility checks, Advanced Analysis packages, and read-only OpenNeuro browsing remain as before.
+
+## Hosted deployments
+
+Set `NEUROBUDDY_ACCESS_PASSWORD` to require a shared password (HTTP Basic auth, any username) for every page and API route except `/api/v2/health`. Leave it unset for local use. Always serve a hosted instance over HTTPS, since uploads contain athlete names.
