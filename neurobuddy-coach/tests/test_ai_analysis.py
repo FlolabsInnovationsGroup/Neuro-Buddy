@@ -245,13 +245,15 @@ def test_evidence_splits_outside_and_within_3sd_with_z_scores():
     assert [f['id'] for f in ev['facts']] == [f'E{i}' for i in range(1, len(ev['facts']) + 1)]
 
 
-def test_instructions_ask_for_two_sections_z_scores_and_may_be_related_to():
+def test_instructions_ask_for_area_sections_with_values_then_implications():
     from backend import ai_analysis
     text = ai_analysis.SYSTEM_PROMPT
-    assert '## Outside ±3 SD (elevated or low)' in text and '## Within ±3 SD (normal)' in text
+    assert '### Values' in text and '### Implications' in text and 'What it measures' in text
+    for status in ('"Out of range (elevated)"', '"Out of range (low)"', '"In range"'):
+        assert status in text
     assert 'Always give the z-score' in text and 'may be related to' in text
     assert 'Do not write about what the metrics cannot show' in text
-    for area in ('### Recovery', '### Fatigue', '### Sleep', '### Stress / arousal', '### Attention / alertness'):
+    for area in ('## Sleep', '## Fatigue', '## Recovery', '## Stress / arousal', '## Attention / alertness'):
         assert area in text
     assert 'Not assessable' not in text and 'overtraining' not in text.lower() and '{effects}' not in text
     for effect in __import__('backend.report_evidence', fromlist=['x']).METRIC_EFFECTS.values():

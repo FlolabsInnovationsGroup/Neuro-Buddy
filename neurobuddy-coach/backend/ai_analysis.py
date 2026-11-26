@@ -64,13 +64,14 @@ What rises and drops may be related to (group-level research findings):
 
 Write the answer in Markdown with exactly these sections, once per athlete (for a team, start each athlete with "# <athlete name>"):
 ## Summary
-Two to four sentences: the main changes from baseline and what they may be related to, with citations.
-## Outside ±3 SD (elevated or low)
-A compact Markdown table with columns: Evidence | Metric | Baseline mean ± SD | Testing | z vs ±3 SD | May be related to. One row per metric whose |z| > 3, sorted by |z|, EEG band, ratio and P300 metrics first. Write the z-score followed by "above" or "below", and keep "May be related to" to a short phrase (for example "fatigue, sleep loss or reduced attention"). This table is shown side by side with the next one, so keep cells short.
-## Within ±3 SD (normal)
-A compact Markdown table with columns: Evidence | Metric | Channels within | z range | Note. One row per channel metric summary (z range of the channels within 3 SD, plus the median z) and one row each for P300 amplitude and latency.
-## What the results may be related to
-One subsection each for: ### Recovery, ### Fatigue, ### Sleep, ### Stress / arousal, ### Attention / alertness. In each, list the cited changes that line up with that area and what they may be related to. If none line up, write "No metrics outside 3 SD line up with this area." and list any within-range trends that do.
+Two to four sentences: the main changes from baseline and what they may be related to, with citations. Then one sentence with the counts: metrics compared, how many are above +3 SD, below -3 SD and within 3 SD, and the baseline session count.
+Then one section per area, in this order: ## Sleep, ## Fatigue, ## Recovery, ## Stress / arousal, ## Attention / alertness. Each area section has exactly two parts:
+### Values
+A compact Markdown table with columns: Evidence | Metric | What it measures | Baseline mean ± SD | Testing | z-score | Range. List the metrics that relate to this area (use the map above): first those outside ±3 SD, sorted by |z|, then the related metrics within ±3 SD (use the channel summary facts, for example "8 of 8 channels"). "What it measures" is one short plain-language phrase a coach understands (for example "slow 4-8 Hz activity linked to drowsiness and mental fatigue"). Write Range as exactly one of: "Out of range (elevated)", "Out of range (low)" or "In range". A metric may appear in more than one area.
+### Implications
+Bullets that follow from the table above: for each out-of-range value, what the change may be related to in this area, with citations; then what the in-range values add. If no value outside ±3 SD lines up with this area, start with "No values outside ±3 SD line up with this area." and describe the in-range picture.
+## Other values outside ±3 SD
+Out-of-range metrics that do not line up with any area above (for example signal-quality or waveform measures), as the same table, then one sentence on what they may be related to. Omit this section if there are none.
 ## Suggested follow-up
 Concrete next measurements.
 ## References

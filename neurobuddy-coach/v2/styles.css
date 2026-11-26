@@ -157,3 +157,6 @@
 .ai-column.within{border-top:3px solid #4ade80}
 .ai-column .table-scroll{overflow-x:auto}
 @media (max-width:1100px){.ai-columns{grid-template-columns:1fr}}
+
+.ai-result td.range-out{color:#ffb4a8;font-weight:700;white-space:nowrap}
+.ai-result td.range-in{color:#8fe3c7;font-weight:600;white-space:nowrap}
