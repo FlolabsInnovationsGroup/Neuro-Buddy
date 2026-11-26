@@ -331,3 +331,55 @@ def test_mock_handles_a_team_subject(tmp_path, monkeypatch):
     md = mock_ai_api.placeholder_analysis({'subject': {'type': 'team', 'athletes': [
         {'athlete_name': 'A One', 'evidence': ev}, {'athlete_name': 'B Two', 'evidence': ev}]}})
     assert '# A One' in md and '# B Two' in md and '[B Two:E1]' in md
+
+
+def test_anthropic_provider_status_and_request(monkeypatch):
+    """NEUROBUDDY_AI_PROVIDER=anthropic sends the report to Claude, without the raw HTML."""
+    from backend import ai_analysis
+    monkeypatch.setenv('NEUROBUDDY_AI_PROVIDER', 'anthropic')
+    monkeypatch.delenv('NEUROBUDDY_AI_API_URL', raising=False)
+    monkeypatch.delenv('NEUROBUDDY_AI_API_KEY', raising=False)
+    assert ai_analysis.status()['configured'] is False
+    monkeypatch.setenv('NEUROBUDDY_AI_API_KEY', 'sk-test')
+    status = ai_analysis.status()
+    assert status['configured'] is True and status['provider'] == 'Anthropic Claude API'
+    assert 'sk-test' not in json.dumps(status)
+
+    sent = {}
+
+    class Block:
+        type = 'text'
+        text = ANALYSIS
+
+    class Message:
+        stop_reason = 'end_turn'
+        model = 'claude-opus-5-5'
+        id = 'msg_test'
+        content = [Block()]
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_final_message(self):
+            return Message()
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            sent['client'] = kwargs
+            self.beta = type('B', (), {'messages': type('M', (), {'stream': staticmethod(lambda **kw: sent.update(request=kw) or Stream())})()})()
+
+    import anthropic
+    monkeypatch.setattr(anthropic, 'Anthropic', FakeClient)
+    result = ai_analysis.analyze_html(REPORT, {'kind': 'uploaded_file', 'filename': 'r.html', 'label': 'r.html'})
+    assert result['analysis_markdown'] == ANALYSIS and result['model'] == 'claude-opus-5-5'
+    req = sent['request']
+    assert sent['client']['api_key'] == 'sk-test'
+    assert req['model'] == 'claude-opus-5-5' and req['system'] == ai_analysis.SYSTEM_PROMPT
+    content = req['messages'][0]['content']
+    assert 'do not send' not in content[0]['text'] and '"html"' not in content[0]['text']
+    assert 'p300_difference_peak_uv' in content[0]['text']
+    assert content[-1] == {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': PNG}}
