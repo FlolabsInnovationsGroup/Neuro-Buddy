@@ -266,7 +266,13 @@ def test_instructions_ask_for_area_sections_with_values_then_implications():
     assert 'Do not write about what the metrics cannot show' in text
     for area in ('## Sleep', '## Fatigue', '## Recovery', '## Stress / arousal', '## Attention / alertness'):
         assert area in text
-    assert 'Not assessable' not in text and 'overtraining' not in text.lower() and '{effects}' not in text
+    assert 'Not assessable' not in text and '{effects}' not in text
+    # Overtraining appears only as something to monitor in the recommendations, never as a disclaimer.
+    assert 'overtraining' not in text.split('## Recommendations')[0].lower()
+    recs = text.split('## Recommendations')[1].split('## Suggested follow-up')[0]
+    assert 'Evidence | Finding | May be related to | Recommendation' in recs
+    for practice in ('Training:', 'Recovery and sleep:', 'Stress management:', 'overtraining', 'breathing'):
+        assert practice in recs
     for effect in __import__('backend.report_evidence', fromlist=['x']).METRIC_EFFECTS.values():
         assert 'cannot' not in (effect['up'] + effect['down']) and 'no established' not in (effect['up'] + effect['down']).lower()
 
@@ -460,6 +466,15 @@ def test_team_sends_every_athletes_longitudinal_report(tmp_path, monkeypatch, fa
     assert result['source']['label'] == 'Atlas Sprint Lab (team, 3 athlete(s))'
     saved = client.get('/api/v2/ai-analysis/subject', params={'type': 'team', 'id': team_id}).json()
     assert saved['saved'] is True and saved['athletes_sent'] == 3
+    # One separate, complete AI report per athlete, each also saved as that athlete's own result.
+    reports = result['reports']
+    assert [r['athlete_name'] for r in reports] == ['Ana Lopez', 'Ben Cole', 'Cy Park']
+    for r in reports:
+        assert r['analysis_markdown'] and r['created_at'] and r['disclaimer'] and r['athletes_sent'] == 1
+        assert r['source']['kind'] == 'team_member' and r['source']['label'] == f"{r['athlete_name']} (Atlas Sprint Lab)"
+        assert r['source']['id'] == ids[r['athlete_name']]
+        own = client.get('/api/v2/ai-analysis/subject', params={'type': 'athlete', 'id': ids[r['athlete_name']]}).json()
+        assert own['saved'] is True and own['analysis_markdown'] == r['analysis_markdown']
 
 
 def test_team_keeps_the_athletes_that_succeed(tmp_path, monkeypatch, fake_api):
@@ -514,3 +529,17 @@ def test_dropped_longitudinal_report_sends_its_statistics_not_the_html(tmp_path,
     assert response.json()['source']['label'] == 'Ben Cole · Longitudinal report'
     saved = client.get('/api/v2/ai-analysis/report', params={'job_id': job_id, 'path': path}).json()
     assert saved['saved'] is True
+
+
+def test_mock_writes_recommendations_tied_to_each_out_of_range_finding(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+    import mock_ai_api
+    from backend import ai_analysis
+    folder = tmp_path / 'one'
+    comparison_folder(folder, 11.6)
+    ev = ai_analysis.athlete_evidence(folder)
+    md = mock_ai_api.placeholder_analysis({'subject': {'type': 'athlete', 'athletes': [{'athlete_name': 'A', 'evidence': ev}]}})
+    recs = md.split('## Recommendations')[1].split('## Suggested follow-up')[0]
+    assert '| Evidence | Finding | May be related to | Recommendation |' in recs
+    assert '| E1 | oddball p300 difference peak uv down (z -16.00) |' in recs
+    assert 'lighter or shorter session' in recs and 'sleep extension' in recs

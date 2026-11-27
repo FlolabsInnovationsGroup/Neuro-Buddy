@@ -56,3 +56,10 @@ def test_ai_processing_has_no_html_file_picker():
     page, script = source("Index.html"), source("v2/app.js")
     assert 'id="choose-ai-report"' not in page and 'id="ai-report-file"' not in page
     assert "Choose HTML file" not in page and "selectAIFile" not in script
+
+
+def test_team_result_shows_one_separate_report_per_athlete():
+    script = source("v2/app.js")
+    assert "function showTeamResults(" in script
+    assert "data-download-report-html" in script and "data-download-report-md" in script
+    assert "separate athlete report(s)" in script

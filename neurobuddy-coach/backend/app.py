@@ -617,6 +617,9 @@ def ai_analyze_subject(body: AISubjectRequest):
     except Exception as exc:
         raise _ai_error(exc) from exc
     ai_analysis.save_result(_subject_result_path(body.type, body.id), result)
+    for report in result.get('reports') or []:  # each athlete's own report is also saved on its own
+        if report.get('source', {}).get('id'):
+            ai_analysis.save_result(_subject_result_path('athlete', report['source']['id']), report)
     return result
 
 

@@ -160,3 +160,6 @@
 
 .ai-result td.range-out{color:#ffb4a8;font-weight:700;white-space:nowrap}
 .ai-result td.range-in{color:#8fe3c7;font-weight:600;white-space:nowrap}
+
+.ai-athlete-report{border:1px solid #2b3656;border-radius:14px;padding:16px 18px;margin:16px 0;background:rgba(14,20,38,.55)}
+.ai-athlete-report .panel-title h2{margin:4px 0 2px;font-size:20px}

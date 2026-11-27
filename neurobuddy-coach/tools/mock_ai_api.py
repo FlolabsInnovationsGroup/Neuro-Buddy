@@ -176,6 +176,36 @@ def _single_sections(ev: dict) -> list[str]:
     ]
 
 
+# Recommendation per out-of-range area, from what the finding may be related to.
+PRACTICES = {
+    'fatigue': 'consider a lighter or shorter session or an extra rest day, and log training load and RPE',
+    'sleep': 'consider sleep extension, regular sleep and wake times, and caffeine timing',
+    'recovery': 'consider active recovery, a deload week if it persists, and HRV and resting heart rate checks',
+    'stress': 'consider paced breathing or HRV biofeedback, a relaxation routine, and less non-training stress',
+    'attention': 'consider shorter, well-rested skill sessions with breaks and a pre-session routine',
+}
+
+
+def _recommendations(ev: dict, prefix: str = '') -> list[str]:
+    effects = ev.get('metric_effects') or {}
+    facts = [f for f in (ev.get('facts') or []) if f.get('kind') == 'outside_3sd']
+    facts.sort(key=lambda f: -abs(f.get('z') or 0))
+    rows = []
+    for f in facts:
+        areas = [a for a, d in ((effects.get(f.get('family') or '') or {}).get('consistent_with') or {}).items()
+                 if d == f.get('direction')]
+        advice = '; '.join(PRACTICES[a] for a in areas if a in PRACTICES) or 'keep the current plan and re-test to confirm'
+        rows.append(f"| {prefix}{f['id']} | {_short(f['metric'])} {f.get('direction')} (z {_z(f.get('z'))}) "
+                    f"| {_short_meaning(f, effects)} | {advice} |")
+    lines = ['## Recommendations']
+    if rows:
+        lines += ['| Evidence | Finding | May be related to | Recommendation |', '|---|---|---|---|', *rows, '',
+                  '- Over the next one to two weeks, consider adjusting load to the findings above and re-testing at the same time of day.']
+    else:
+        lines += ['No value is outside ±3 SD. Consider keeping the current plan and the usual sleep and recovery routine.']
+    return lines + ['']
+
+
 def placeholder_analysis(payload: dict) -> str:
     banner = ('> PLACEHOLDER RESPONSE from tools/mock_ai_api.py. No AI model analyzed this report. This is a rule-based '
               'example built only from the numbered facts Coach extracted, to show the layout and citation style of the real analysis.')
@@ -190,6 +220,7 @@ def placeholder_analysis(payload: dict) -> str:
             if team:
                 out += [f"# {a.get('athlete_name')}", '']
             out += _comparison_sections(ev, prefix=f"{a.get('athlete_name')}:" if team else '')
+            out += _recommendations(ev, prefix=f"{a.get('athlete_name')}:" if team else '')
         if subject.get('athletes_without_comparison'):
             out += ['Athletes without a completed baseline vs testing comparison: ' + ', '.join(subject['athletes_without_comparison']) + '.', '']
     else:
@@ -197,6 +228,8 @@ def placeholder_analysis(payload: dict) -> str:
         ev = report.get('evidence') or {}
         refs.update(ev.get('references') or {})
         out += _comparison_sections(ev) if ev.get('report_type') == 'baseline_comparison' else _single_sections(ev)
+        if ev.get('report_type') == 'baseline_comparison':
+            out += _recommendations(ev)
         figures = report.get('figures') or []
         if figures:
             out += ['Figures sent: ' + '; '.join(f"Figure {f.get('index')}: {f.get('caption')}" for f in figures) + '.', '']
