@@ -5,3 +5,11 @@
 **/dist/
 /neurobuddy-coach/data/
 .DS_Store
+
+# Secrets: API keys live only in environment variables (e.g. Railway), never in the repo
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
