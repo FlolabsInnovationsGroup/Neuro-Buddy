@@ -425,11 +425,6 @@
       if(state.aiReport===subject&&saved.saved)showAIResult(saved,true);}
     catch{/* no saved analysis yet */}
   }
-  function selectAIFile(file){
-    if(!file)return;
-    if(!/\.html?$/i.test(file.name)){notify('Drop a Neurobuddy HTML report (.html file).','error');return;}
-    selectAIReport({kind:'file',file,label:`${file.name} (${fmtSize(file.size)}) from this computer`});
-  }
   function inlineMarkdown(text){
     return html(text).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g,'$1<em>$2</em>');
   }
@@ -517,7 +512,6 @@ ${body.innerHTML}
       let result;
       if(report.kind==='job')result=await api('/v2/ai-analysis/report',jsonOpt('POST',{job_id:report.job_id,path:report.path}));
       else if(report.kind==='subject')result=await api('/v2/ai-analysis/subject',jsonOpt('POST',{type:report.type,id:report.id}));
-      else{const form=new FormData();form.append('file',report.file,report.file.name);result=await api('/v2/ai-analysis/upload',{method:'POST',body:form});}
       showAIResult(result);
       $('advanced-selection').textContent=`AI analysis complete for ${report.label}.`;
       notify('AI analysis complete. It is exploratory and not a diagnosis.','success');
@@ -528,7 +522,7 @@ ${body.innerHTML}
     }finally{state.aiBusy=false;renderAIControls();}
   }
   const advancedDrop=$('advanced-drop');
-  advancedDrop.addEventListener('dragover',e=>{const types=[...e.dataTransfer.types];if(types.includes('application/x-neurobuddy-advanced')||types.includes(REPORT_MIME)||types.includes('Files')){e.preventDefault();advancedDrop.classList.add('drag-over');}});
+  advancedDrop.addEventListener('dragover',e=>{const types=[...e.dataTransfer.types];if(types.includes('application/x-neurobuddy-advanced')||types.includes(REPORT_MIME)){e.preventDefault();advancedDrop.classList.add('drag-over');}});
   advancedDrop.addEventListener('dragleave',()=>advancedDrop.classList.remove('drag-over'));
   advancedDrop.addEventListener('drop',e=>{
     advancedDrop.classList.remove('drag-over');
@@ -536,11 +530,8 @@ ${body.innerHTML}
     try{
       if(report){e.preventDefault();const r=JSON.parse(report);safe(()=>selectAIReport({kind:'job',job_id:r.job_id,path:r.path,label:r.label}));return;}
       if(pkg){e.preventDefault();const item=JSON.parse(pkg);safe(()=>selectAISubject(item.type,item.id));return;}
-      if(e.dataTransfer.files&&e.dataTransfer.files.length){e.preventDefault();selectAIFile(e.dataTransfer.files[0]);}
     }catch(err){notify(err.message,'error');}
   });
-  $('choose-ai-report').addEventListener('click',e=>{e.stopPropagation();$('ai-report-file').value='';$('ai-report-file').click();});
-  $('ai-report-file').addEventListener('change',e=>selectAIFile(e.target.files&&e.target.files[0]));
   $('process-ai').addEventListener('click',()=>safe(runAI));
   $('download-ai-html').addEventListener('click',()=>{
     const r=state.aiResult;if(!r)return;
