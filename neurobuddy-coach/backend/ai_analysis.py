@@ -457,6 +457,7 @@ def athlete_evidence(folder: Path) -> dict | None:
 
 
 def build_subject_request(subject: dict, source: dict) -> dict:
+    """Request body for one athlete's (or a whole selection's) longitudinal statistics."""
     return {
         'schema_version': REQUEST_SCHEMA,
         'instructions': SYSTEM_PROMPT,
@@ -466,22 +467,92 @@ def build_subject_request(subject: dict, source: dict) -> dict:
     }
 
 
-def analyze_subject(subject: dict, source: dict) -> dict:
-    if not is_configured():
-        raise AINotConfigured('AI analysis is not configured yet. Set NEUROBUDDY_AI_API_URL (and NEUROBUDDY_AI_API_KEY if the API needs one) on the computer running Coach, then restart it.')
-    if not subject.get('athletes'):
-        raise ReportNotFound('No completed baseline vs testing comparison was found for this selection. Run an athlete or team analysis first.')
+TEAM_WORKERS = 4
+
+
+def is_longitudinal_report(relative_path: str) -> bool:
+    """True for an athlete's longitudinal report: the testing session compared with its baselines."""
+    rel = relative_path.replace('\\', '/')
+    return rel == 'athlete_report.html' or bool(re.fullmatch(r'athletes/[^/]+/athlete_report\.html', rel))
+
+
+def _analyze_one(subject: dict, source: dict) -> dict:
     size = len(json.dumps(subject))
     limit = settings()['max_chars']
     if size > limit:
-        raise ReportTooLarge(f'This selection has {size:,} characters of statistics, above the {limit:,} limit '
-                             '(NEUROBUDDY_AI_MAX_CHARS). Analyze one athlete at a time, or raise the limit.')
-    result = call_api(build_subject_request(subject, source))
+        name = subject['athletes'][0].get('athlete_name', 'This athlete') if subject.get('athletes') else 'This selection'
+        raise ReportTooLarge(f'{name} has {size:,} characters of statistics, above the {limit:,} limit '
+                             '(NEUROBUDDY_AI_MAX_CHARS). Raise the limit to analyze it.')
+    return call_api(build_subject_request(subject, source))
+
+
+def _strip_athlete_heading(markdown: str, name: str) -> str:
+    """Drop a leading "# <athlete name>" so the team result adds exactly one heading per athlete."""
+    lines = markdown.lstrip().split('\n')
+    if lines and re.fullmatch(r'#\s+' + re.escape(name) + r'\s*', lines[0].strip()):
+        lines = lines[1:]
+    return '\n'.join(lines).strip()
+
+
+def _analyze_team(subject: dict, source: dict) -> dict:
+    """One AI call per athlete's longitudinal report, run side by side, then joined into one team result.
+
+    Each athlete gets the same full analysis as a single dropped longitudinal report, so a team of
+    any size neither hits the size limit nor runs out of output length.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    athletes = subject['athletes']
+
+    def one(athlete):
+        part = {**subject, 'type': 'athlete', 'athletes': [athlete], 'athletes_without_comparison': []}
+        try:
+            one_source = {**source, 'kind': 'team_member', 'athlete_id': athlete.get('athlete_id'),
+                          'label': f"{athlete['athlete_name']} ({subject.get('team_name') or 'team'})"}
+            return athlete, _analyze_one(part, one_source), None
+        except (AIRequestFailed, ReportTooLarge) as exc:
+            return athlete, None, exc
+
+    with ThreadPoolExecutor(max_workers=min(TEAM_WORKERS, len(athletes))) as pool:
+        outcomes = list(pool.map(one, athletes))
+    done = [(a, r) for a, r, e in outcomes if r is not None]
+    failed = [(a, e) for a, r, e in outcomes if e is not None]
+    if not done:
+        raise failed[0][1]
+    sections = []
+    if subject.get('athletes_without_comparison'):
+        sections.append('> No longitudinal report yet for: ' + ', '.join(subject['athletes_without_comparison'])
+                        + '. Run a Test Athlete or Test Team analysis for them first.')
+    for athlete, error in failed:
+        sections.append(f'> {athlete["athlete_name"]} was not analyzed: {error}')
+    for athlete, result in done:
+        sections.append(f'# {athlete["athlete_name"]}\n\n' + _strip_athlete_heading(result['analysis_markdown'], athlete['athlete_name']))
+    models = sorted({r['model'] for _, r in done if r.get('model')})
+    return {
+        'analysis_markdown': '\n\n'.join(sections),
+        'model': ', '.join(models) if models else settings()['model'],
+        'truncated': any(r.get('truncated') for _, r in done),
+        'provider_response_id': None,
+        'athletes_analyzed': [a['athlete_name'] for a, _ in done],
+        'athletes_failed': [{'athlete_name': a['athlete_name'], 'error': str(e)} for a, e in failed],
+    }
+
+
+def analyze_subject(subject: dict, source: dict) -> dict:
+    """Analyze athletes' longitudinal reports. A team sends one longitudinal report per athlete."""
+    if not is_configured():
+        raise AINotConfigured('AI analysis is not configured yet. Set NEUROBUDDY_AI_API_URL (and NEUROBUDDY_AI_API_KEY if the API needs one) on the computer running Coach, then restart it.')
+    if not subject.get('athletes'):
+        raise ReportNotFound('No longitudinal report (baseline vs testing comparison) was found for this selection. Run a Test Athlete or Test Team analysis first.')
+    if subject.get('type') == 'team':
+        result = _analyze_team(subject, source)
+    else:
+        result = _analyze_one(subject, source)
     result.update({
         'schema_version': 'neurobuddy.ai-report-analysis/0.1',
         'created_at': datetime.now(timezone.utc).isoformat(),
         'source': source,
         'athletes_sent': len(subject['athletes']),
+        'athletes_without_comparison': list(subject.get('athletes_without_comparison') or []),
         'figures_sent': 0,
         'disclaimer': 'Exploratory AI interpretation of EEG statistics. Not a diagnosis or a readiness decision.',
     })

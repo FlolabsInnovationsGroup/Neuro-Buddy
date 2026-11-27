@@ -496,11 +496,36 @@ def _report_source(job_id: str, path: str) -> tuple[Path, dict]:
                     'job_mode': job.get('mode'), 'athlete_name': athlete, 'job_created_at': job.get('created_at')}
 
 
+def _longitudinal_subject(folder: Path, source: dict) -> dict:
+    """A dropped longitudinal report is sent as its structured statistics, like a team member.
+
+    The longitudinal HTML embeds every baseline report and player, which is far larger than the
+    statistics it is built from, so the pipeline's own comparison files are sent instead.
+    """
+    rel = source['path']
+    athlete_id = rel.split('/')[1] if rel.startswith('athletes/') else None
+    with database() as db:
+        job = dict(must_get(db, 'jobs', source['job_id']))
+        athlete_id = athlete_id or job.get('athlete_id')
+        athlete = db.execute('SELECT name FROM athletes WHERE id=?', (athlete_id,)).fetchone() if athlete_id else None
+        team = db.execute('SELECT name FROM teams WHERE id=?', (job.get('team_id'),)).fetchone() if job.get('team_id') else None
+    name = athlete['name'] if athlete else (source.get('athlete_name') or 'Athlete')
+    source['athlete_name'] = name
+    source['label'] = f'{name} · Longitudinal report'
+    evidence = ai_analysis.athlete_evidence(folder)
+    athletes = [{'athlete_name': name, 'athlete_id': athlete_id, 'job_id': source['job_id'], 'evidence': evidence}] if evidence else []
+    return {'type': 'athlete', 'team_name': team['name'] if team else None, 'athletes': athletes,
+            'athletes_without_comparison': [] if evidence else [name]}
+
+
 @app.post('/api/v2/ai-analysis/report')
 def ai_analyze_report(body: AIReportRequest):
     target, source = _report_source(body.job_id, body.path)
     try:
-        result = ai_analysis.analyze_html(target.read_text(encoding='utf-8', errors='replace'), source)
+        if ai_analysis.is_longitudinal_report(source['path']):
+            result = ai_analysis.analyze_subject(_longitudinal_subject(target.parent, source), source)
+        else:
+            result = ai_analysis.analyze_html(target.read_text(encoding='utf-8', errors='replace'), source)
     except Exception as exc:
         raise _ai_error(exc) from exc
     ai_analysis.save_result(ai_analysis.result_path(REPORTS, body.job_id, source['path']), result)

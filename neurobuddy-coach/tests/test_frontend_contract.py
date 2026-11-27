@@ -42,3 +42,11 @@ def test_unchanged_navigation_and_in_modal_status():
     assert 'id="import-status"' in page
     assert 'id="retry-upload"' in page
     assert 'id="native-file-picker"' in page
+
+
+def test_ai_processing_offers_team_and_longitudinal_reports_only():
+    script = source("v2/app.js")
+    assert "Select / Drag Athlete results" not in script
+    assert 'data-advanced-type="athlete"' not in script
+    assert 'data-advanced-type="team"' in script and "Select / Drag Team results" in script
+    assert "Longitudinal reports · drag into AI processing" in script

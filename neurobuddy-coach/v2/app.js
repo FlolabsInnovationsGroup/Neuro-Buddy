@@ -220,19 +220,23 @@
   function aiReportChips(athlete){
     const runs=(athlete.reports||[]).filter(r=>(r.html_reports||[]).length);
     if(!runs.length)return '';
-    return `<div class="ai-report-list"><div class="ai-report-heading">HTML reports · drag into AI processing</div>${runs.map(r=>{
+    return `<div class="ai-report-list"><div class="ai-report-heading">Longitudinal reports · drag into AI processing</div>${runs.map(r=>{
       const when=new Date(r.created_at).toLocaleString();
-      const kind=r.mode==='single'?'Single EEG':r.mode==='team'?'Team batch':'Athlete comparison';
+      const kind=r.mode==='team'?'Team batch':'Athlete comparison';
       return `<div class="ai-report-run"><small>${html(kind)} · ${html(when)}</small><div class="actions">${r.html_reports.map(h=>{
         const active=state.aiReport&&state.aiReport.kind==='job'&&state.aiReport.job_id===h.job_id&&state.aiReport.path===h.path;
-        return `<button type="button" class="secondary-button small-btn ai-report-chip${active?' active':''}" draggable="true" data-ai-job="${html(h.job_id)}" data-ai-path="${html(h.path)}" data-ai-label="${html(athlete.name+' · '+h.label+' · '+when)}" title="Drag into the AI processing area, or click to select">⧉ ${html(h.label)}</button>`;}).join('')}</div></div>`;}).join('')}</div>`;
+        return `<button type="button" class="secondary-button small-btn ai-report-chip${active?' active':''}" draggable="true" data-ai-job="${html(h.job_id)}" data-ai-path="${html(h.path)}" data-ai-label="${html(athlete.name+' · '+h.label+' · '+when)}" title="Drag this longitudinal report into the AI processing area, or click to select it">⧉ ${html(h.label)}</button>`;}).join('')}</div></div>`;}).join('')}</div>`;
+  }
+  // Athletes whose latest runs include a longitudinal report. These are what a team selection sends to the AI.
+  function longitudinalAthletes(team){
+    return (team.athletes||[]).filter(a=>(a.reports||[]).some(r=>(r.html_reports||[]).length));
   }
   async function loadAdvanced(){
     safe(loadAIStatus);
     state.advanced=await api('/v2/shelf-advanced');
     $('advanced-tree').innerHTML=state.advanced.teams.map(t=>`<details open class="folder"><summary>▱ ${html(t.name)} <span class="small-count">${t.athletes.length} athlete(s)</span></summary><div class="folder-inner">
-      <div class="actions"><button class="secondary-button small-btn" draggable="true" data-advanced-type="team" data-advanced-id="${html(t.id)}">↗ Select / Drag Team results</button><button type="button" class="danger-icon" data-delete-advanced-team="${html(t.id)}" title="Delete this team">Delete team</button></div>
-      ${t.athletes.map(a=>`<article class="recording"><div class="recording-top"><strong>♙ ${html(a.name)}</strong>${badge('completed')}</div><small>${a.reports.length} saved run(s)</small><div class="actions"><button class="secondary-button small-btn" draggable="true" data-advanced-type="athlete" data-advanced-id="${html(a.id)}">↗ Select / Drag Athlete results</button><button type="button" class="danger-icon" data-delete-advanced-athlete="${html(a.id)}" title="Delete this athlete">Delete athlete</button></div>
+      <div class="actions"><button class="secondary-button small-btn" draggable="true" data-advanced-type="team" data-advanced-id="${html(t.id)}" title="Sends the latest longitudinal report of every athlete in this team">↗ Select / Drag Team results · ${longitudinalAthletes(t).length} longitudinal report(s)</button><button type="button" class="danger-icon" data-delete-advanced-team="${html(t.id)}" title="Delete this team">Delete team</button></div>
+      ${t.athletes.map(a=>`<article class="recording"><div class="recording-top"><strong>♙ ${html(a.name)}</strong>${badge('completed')}</div><small>${a.reports.length} saved run(s)</small><div class="actions"><button type="button" class="danger-icon" data-delete-advanced-athlete="${html(a.id)}" title="Delete this athlete">Delete athlete</button></div>
         ${aiReportChips(a)}
         <div class="advanced-shelves">${(a.shelves||[]).map(s=>`<div class="advanced-shelf"><span>${html(advancedShelfLabel(s))}</span><button type="button" class="danger-icon" data-delete-shelf="${html(s.id)}" title="Delete this EEG shelf">Delete shelf</button></div>`).join('')||'<p class="helper">No EEG shelves for this athlete.</p>'}</div></article>`).join('')}
       </div></details>`).join('')||'<div class="empty">Completed EEG analyses will appear here by Team and Athlete.</div>';
@@ -386,9 +390,9 @@
     const configured=Boolean(state.aiStatus&&state.aiStatus.configured);
     button.disabled=state.aiBusy||!state.aiReport||!configured;
     button.textContent=state.aiBusy?'Analyzing report…':configured?'Process with AI':'Process with AI · Not configured';
-    button.title=!configured?'Set NEUROBUDDY_AI_API_URL on the computer running Coach, then restart it.':!state.aiReport?'Drop an athlete, a team or an HTML report first':'Send this selection to the AI for analysis';
+    button.title=!configured?'Set NEUROBUDDY_AI_API_URL on the computer running Coach, then restart it.':!state.aiReport?'Drop a team or a longitudinal report first':'Send this selection to the AI for analysis';
     if(state.aiStatus&&!configured)help.innerHTML='The AI analysis API is not connected yet. When FloLabs supplies it, set <code>NEUROBUDDY_AI_API_URL</code> (and <code>NEUROBUDDY_AI_API_KEY</code>) in the terminal that starts Coach, then restart it. You can still select reports and prepare JSON packages.';
-    else help.textContent=`Drop an athlete or a team to send every baseline statistic and the testing comparison, or drop one HTML report. The AI analysis API (${state.aiStatus?.endpoint_host||'external'}) lists the metrics outside and within ±3 SD of baseline with their z-scores and what they may be related to (recovery, fatigue, sleep, stress, attention). Results are exploratory, not a diagnosis.`;
+    else help.textContent=`Drop a team to send the latest longitudinal report of every athlete in it, or drop one longitudinal report. A longitudinal report compares the testing session with the athlete's baselines. The AI analysis API (${state.aiStatus?.endpoint_host||'external'}) lists the metrics outside and within ±3 SD of baseline with their z-scores and what they may be related to (recovery, fatigue, sleep, stress, attention). Results are exploratory, not a diagnosis.`;
   }
   async function selectAIReport(report){
     state.aiReport=report;state.advancedSelection=null;
@@ -406,14 +410,17 @@
   async function selectAISubject(type,id){
     const team=state.advanced.teams.find(t=>t.id===id||t.athletes.some(a=>a.id===id));
     const athlete=type==='athlete'&&team?team.athletes.find(a=>a.id===id):null;
-    const label=type==='team'?`${team?team.name:'Team'} (team, ${team?team.athletes.length:0} athlete(s))`:`${athlete?athlete.name:'Athlete'} (athlete)`;
+    const members=team?longitudinalAthletes(team):[];
+    const label=type==='team'?`${team?team.name:'Team'} (team, ${members.length} athlete(s))`:`${athlete?athlete.name:'Athlete'} (athlete)`;
     const subject={kind:'subject',type,id,label};
     state.aiReport=subject;
     document.querySelectorAll('.ai-report-chip').forEach(b=>b.classList.remove('active'));
     renderAIControls();
     $('ai-result-panel').hidden=true;
     await chooseAdvanced(type,id);
-    $('advanced-selection').textContent=`Selected ${label}: every baseline statistic and the testing session compared against it. Press Process with AI to analyze.`;
+    $('advanced-selection').textContent=type==='team'
+      ?`Selected ${label}. The latest longitudinal report of each athlete (${members.map(a=>a.name).join(', ')||'none yet'}) is sent to the AI, one analysis per athlete. Press Process with AI to analyze.`
+      :`Selected ${label}: every baseline statistic and the testing session compared against it. Press Process with AI to analyze.`;
     try{const saved=await api(`/v2/ai-analysis/subject?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
       if(state.aiReport===subject&&saved.saved)showAIResult(saved,true);}
     catch{/* no saved analysis yet */}
@@ -493,7 +500,8 @@ ${body.innerHTML}
     state.aiResult=result;
     $('ai-result-title').textContent=`AI analysis · ${result.source?.label||'HTML report'}`;
     const when=result.created_at?new Date(result.created_at).toLocaleString():'';
-    const sent=result.athletes_sent!=null?`${result.athletes_sent} athlete(s) sent`:`${result.figures_sent??0} figure(s) sent`;
+    const failed=(result.athletes_failed||[]).length;
+    const sent=result.athletes_sent!=null?`${result.athletes_sent} longitudinal report(s) sent${failed?`, ${failed} not analyzed`:''}`:`${result.figures_sent??0} figure(s) sent`;
     $('ai-result-meta').textContent=`${saved?'Saved analysis':'New analysis'} · ${result.model||''} · ${when} · ${sent}${result.truncated?' · Output was cut off at the length limit':''}`;
     $('ai-result').innerHTML=renderMarkdown(result.analysis_markdown);
     pairSideBySide($('ai-result'));
@@ -504,7 +512,7 @@ ${body.innerHTML}
     const report=state.aiReport;
     if(!report||state.aiBusy)return;
     state.aiBusy=true;renderAIControls();
-    $('advanced-selection').textContent=`Analyzing ${report.label}. This usually takes one to three minutes.`;
+    $('advanced-selection').textContent=`Analyzing ${report.label}. This usually takes one to three minutes${report.type==='team'?' (athletes are analyzed side by side)':''}.`;
     try{
       let result;
       if(report.kind==='job')result=await api('/v2/ai-analysis/report',jsonOpt('POST',{job_id:report.job_id,path:report.path}));

@@ -377,6 +377,11 @@ def install(app, base):
         base.WORKERS.submit(run_job,key,req.model_dump())
         return {'id':key,'status':'queued','mode':req.mode}
 
+    def longitudinal_reports(job_id,member_athlete_id=None):
+        # AI Processing offers only longitudinal reports (testing compared with the baselines).
+        return [h for h in ai_analysis.list_html_reports(base.REPORTS,job_id,member_athlete_id)
+                if ai_analysis.is_longitudinal_report(h['path'])]
+
     @router.get('/shelf-advanced')
     def advanced_packages():
         """Index per-athlete result packages, including analyses from a team batch."""
@@ -395,12 +400,12 @@ def install(app, base):
                 for j in jobs:
                     if j['mode'] in ('single','athlete') and j['athlete_id']==a['id']:
                         reports.append({'id':j['id'],'mode':j['mode'],'created_at':j['created_at'],'member_athlete_id':None,
-                            'html_reports':ai_analysis.list_html_reports(base.REPORTS,j['id'])})
+                            'html_reports':longitudinal_reports(j['id'])})
                     elif j['mode']=='team' and j['team_id']==t['id'] and j['result']:
                         data=json.loads(j['result'])
                         if any(m.get('status')=='completed' and m.get('athlete_id')==a['id'] for m in data.get('members',[])):
                             reports.append({'id':j['id'],'mode':'team','created_at':j['created_at'],'member_athlete_id':a['id'],
-                                'html_reports':ai_analysis.list_html_reports(base.REPORTS,j['id'],a['id'])})
+                                'html_reports':longitudinal_reports(j['id'],a['id'])})
                 shelves=[]
                 for rec in recordings:
                     if rec['athlete_id']!=a['id']:continue

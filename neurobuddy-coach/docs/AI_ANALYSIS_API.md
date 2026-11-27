@@ -95,7 +95,7 @@ NEUROBUDDY_AI_API_URL=http://127.0.0.1:9100/analyze \
 
 ### Whole athlete or team (`subject` instead of `report`)
 
-Dropping an Athlete or Team chip calls `POST /api/v2/ai-analysis/subject` with `{"type": "athlete"|"team", "id": "<uuid>"}`. For each athlete Coach takes the latest completed baseline vs testing comparison (the athlete's own run or a team batch) and reads the pipeline's structured files, not HTML: `comparative_analysis.csv` (every metric's baseline mean, SD, testing value and z-score) and `baseline/longitudinal.json` (each baseline session's value), plus the statistics and graph data of the testing report. The request then carries:
+In Advanced Analysis, AI Processing offers only longitudinal reports (`athlete_report.html`: the testing session compared with the athlete's baseline mean and SD) and the Team button. Dropping a longitudinal report chip calls `POST /api/v2/ai-analysis/report`, which sends that athlete's statistics as a one-athlete `subject` (below) instead of the page's HTML, since the page embeds every baseline report and is far larger than its statistics. Dropping a Team (or the API, for an athlete id) calls `POST /api/v2/ai-analysis/subject` with `{"type": "athlete"|"team", "id": "<uuid>"}`. For each athlete Coach takes the latest completed baseline vs testing comparison (the athlete's own run or a team batch) and reads the pipeline's structured files, not HTML: `comparative_analysis.csv` (every metric's baseline mean, SD, testing value and z-score) and `baseline/longitudinal.json` (each baseline session's value), plus the statistics and graph data of the testing report. The request then carries:
 
 ```json
 {
@@ -111,7 +111,7 @@ Dropping an Athlete or Team chip calls `POST /api/v2/ai-analysis/subject` with `
 }
 ```
 
-The response is the same. For a team, the analysis repeats its sections per athlete under `# <athlete name>`, and citations take the form `Athlete Rivera:E3`. `GET /api/v2/ai-analysis/subject?type=&id=` returns the last saved result.
+For a team, Coach sends one request per athlete (each `subject` holds one athlete, up to 4 at a time) and joins the answers into one result, so a team of any size stays within `NEUROBUDDY_AI_MAX_CHARS` and the model's output length. Athletes without a longitudinal report are listed at the top; an athlete whose request fails is noted and the others are kept (`athletes_failed`). The response is the same. For a team, the analysis repeats its sections per athlete under `# <athlete name>`, and citations take the form `Athlete Rivera:E3`. `GET /api/v2/ai-analysis/subject?type=&id=` returns the last saved result.
 
 ## Response
 
