@@ -38,6 +38,40 @@ DB_PATH = STORAGE / 'coach.sqlite3'
 LOCK = threading.RLock()
 WORKERS = ThreadPoolExecutor(max_workers=1, thread_name_prefix='neurobuddy-v071')
 
+_PIPELINE_POOL = None
+_PIPELINE_POOL_LOCK = threading.Lock()
+
+
+def pipeline_workers() -> int:
+    """How many EEG recordings are analyzed at once. NEUROBUDDY_PIPELINE_WORKERS overrides it (1 = one at a time)."""
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except AttributeError:
+        cpus = os.cpu_count() or 1
+    try:
+        return max(1, int(os.environ.get('NEUROBUDDY_PIPELINE_WORKERS', '') or min(4, cpus)))
+    except ValueError:
+        return max(1, min(4, cpus))
+
+
+def pipeline_pool():
+    """Shared process pool for EEG recordings, or None to analyze them one at a time.
+
+    Each recording runs the unchanged pipeline in its own process, so a team's or
+    athlete's recordings use several CPU cores instead of one. Spawned (not forked)
+    processes keep this safe inside the threaded web server.
+    """
+    global _PIPELINE_POOL
+    if pipeline_workers() <= 1:
+        return None
+    with _PIPELINE_POOL_LOCK:
+        if _PIPELINE_POOL is None:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+            _PIPELINE_POOL = ProcessPoolExecutor(max_workers=pipeline_workers(),
+                                                 mp_context=multiprocessing.get_context('spawn'))
+        return _PIPELINE_POOL
+
 _REPORT_ID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 SIGNAL_SUFFIXES = ('.set', '.edf', '.bdf', '.vhdr', '.fif', '.fif.gz')
 ALLOWED_SUFFIXES = SIGNAL_SUFFIXES + ('.fdt', '.eeg', '.vmrk', '.tsv', '.csv', '.txt', '.json')
@@ -295,7 +329,7 @@ def _run_job(job_id):
         else:
             struct = run_athlete_workflow(sources,test_source,dest,
                 team_id=athlete['team_id'],athlete_id=athlete['id'],
-                min_baselines=baseline_minimum(task))
+                min_baselines=baseline_minimum(task),executor=pipeline_pool())
             comparison = json.loads((dest/'comparative_analysis.json').read_text())
             baseline = json.loads((dest/'baseline'/'longitudinal.json').read_text())
             individual=[]

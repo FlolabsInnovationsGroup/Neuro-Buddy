@@ -383,6 +383,15 @@ def publish_comparison_pages(output: Path, results, test_report: dict, comp: dic
     (output/'athlete_report.html').write_text(page,encoding='utf-8')
 
 
+def _picklable(fn) -> bool:
+    import pickle
+    try:
+        pickle.dumps(fn)
+        return True
+    except Exception:
+        return False
+
+
 def run_athlete_workflow(baselines: Sequence[str | Path], test: str | Path, output: str | Path,
                          *, team_id: str, athlete_id: str,
                          process_one: Callable | None = None,
@@ -390,11 +399,15 @@ def run_athlete_workflow(baselines: Sequence[str | Path], test: str | Path, outp
                          z_threshold: float = ABNORMAL_Z,
                          large_threshold_mb: int = 256, chunk_seconds: int = 60,
                          sleep_staging: str = 'if_missing', player_frames: int = 1500,
-                         artifact_mode: str = 'legacy', mains_frequency_hz: float = 60.0) -> dict:
+                         artifact_mode: str = 'legacy', mains_frequency_hz: float = 60.0,
+                         executor=None) -> dict:
     """Frontend-ready orchestration, exactly one existing EEG analysis per recording.
 
     Use `process_one` injection for deterministic fixture tests. In production,
     the same neurobuddy_v2.pipeline.process() function is called each time.
+    `executor` (for example a process pool) runs the baseline and testing recordings
+    side by side. Each recording is still analyzed on its own, exactly as before, and
+    the results are used in the same order, so the outputs do not change.
     """
     from .pipeline import process
     run = process if process_one is None else process_one
@@ -408,23 +421,30 @@ def run_athlete_workflow(baselines: Sequence[str | Path], test: str | Path, outp
     if len(set(files+[test])) != len(files)+1:
         raise ComparisonError('The same EEG path cannot be used as multiple baselines or as the test EEG.')
     output.mkdir(parents=True,exist_ok=True)
-    results=[]
+    options=dict(large_threshold_mb=large_threshold_mb, chunk_seconds=chunk_seconds,
+                 sleep_staging=sleep_staging, player_frames=player_frames,
+                 artifact_mode=artifact_mode, mains_frequency_hz=mains_frequency_hz)
+    jobs=[]
     for index, path in enumerate(files,1):
         dest=output/'baseline'/f'{index:02d}_{_identity_slug(path.stem)}'
         dest.mkdir(parents=True,exist_ok=True)
-        delivered=run(path,dest,large_threshold_mb=large_threshold_mb,
-                      chunk_seconds=chunk_seconds, sleep_staging=sleep_staging,
-                      player_frames=player_frames, artifact_mode=artifact_mode,
-                      mains_frequency_hz=mains_frequency_hz)
+        jobs.append((path,dest))
+    testdir=output/'test'
+    testdir.mkdir(parents=True,exist_ok=True)
+    jobs.append((test,testdir))
+    if executor is not None and not _picklable(run):
+        executor=None  # a test stub or closure cannot be sent to another process
+    if executor is None:
+        outputs=[run(path,dest,**options) for path,dest in jobs]
+    else:
+        futures=[executor.submit(run,path,dest,**options) for path,dest in jobs]
+        outputs=[future.result() for future in futures]
+    results=[]
+    for index,((_,dest),delivered) in enumerate(zip(jobs[:-1],outputs[:-1]),1):
         if len(delivered)!=1:
             raise ComparisonError(f'Baseline {index} must produce exactly one EEG report; received {len(delivered)}.')
         results.append((delivered[0][0],dest))
-    testdir=output/'test'
-    testdir.mkdir(parents=True,exist_ok=True)
-    delivered=run(test,testdir,large_threshold_mb=large_threshold_mb,
-                  chunk_seconds=chunk_seconds, sleep_staging=sleep_staging,
-                  player_frames=player_frames, artifact_mode=artifact_mode,
-                  mains_frequency_hz=mains_frequency_hz)
+    delivered=outputs[-1]
     if len(delivered)!=1:
         raise ComparisonError('Testing EEG must produce exactly one report.')
     test_report=delivered[0][0]
