@@ -42,3 +42,24 @@ def test_unchanged_navigation_and_in_modal_status():
     assert 'id="import-status"' in page
     assert 'id="retry-upload"' in page
     assert 'id="native-file-picker"' in page
+
+
+def test_ai_processing_offers_team_and_longitudinal_reports_only():
+    script = source("v2/app.js")
+    assert "Select / Drag Athlete results" not in script
+    assert 'data-advanced-type="athlete"' not in script
+    assert 'data-advanced-type="team"' in script and "Select / Drag Team results" in script
+    assert "Longitudinal reports · drag into AI processing" in script
+
+
+def test_ai_processing_has_no_html_file_picker():
+    page, script = source("Index.html"), source("v2/app.js")
+    assert 'id="choose-ai-report"' not in page and 'id="ai-report-file"' not in page
+    assert "Choose HTML file" not in page and "selectAIFile" not in script
+
+
+def test_team_result_shows_one_separate_report_per_athlete():
+    script = source("v2/app.js")
+    assert "function showTeamResults(" in script
+    assert "data-download-report-html" in script and "data-download-report-md" in script
+    assert "separate athlete report(s)" in script

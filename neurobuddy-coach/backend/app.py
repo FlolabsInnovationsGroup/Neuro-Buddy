@@ -38,6 +38,40 @@ DB_PATH = STORAGE / 'coach.sqlite3'
 LOCK = threading.RLock()
 WORKERS = ThreadPoolExecutor(max_workers=1, thread_name_prefix='neurobuddy-v071')
 
+_PIPELINE_POOL = None
+_PIPELINE_POOL_LOCK = threading.Lock()
+
+
+def pipeline_workers() -> int:
+    """How many EEG recordings are analyzed at once. NEUROBUDDY_PIPELINE_WORKERS overrides it (1 = one at a time)."""
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except AttributeError:
+        cpus = os.cpu_count() or 1
+    try:
+        return max(1, int(os.environ.get('NEUROBUDDY_PIPELINE_WORKERS', '') or min(4, cpus)))
+    except ValueError:
+        return max(1, min(4, cpus))
+
+
+def pipeline_pool():
+    """Shared process pool for EEG recordings, or None to analyze them one at a time.
+
+    Each recording runs the unchanged pipeline in its own process, so a team's or
+    athlete's recordings use several CPU cores instead of one. Spawned (not forked)
+    processes keep this safe inside the threaded web server.
+    """
+    global _PIPELINE_POOL
+    if pipeline_workers() <= 1:
+        return None
+    with _PIPELINE_POOL_LOCK:
+        if _PIPELINE_POOL is None:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+            _PIPELINE_POOL = ProcessPoolExecutor(max_workers=pipeline_workers(),
+                                                 mp_context=multiprocessing.get_context('spawn'))
+        return _PIPELINE_POOL
+
 _REPORT_ID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 SIGNAL_SUFFIXES = ('.set', '.edf', '.bdf', '.vhdr', '.fif', '.fif.gz')
 ALLOWED_SUFFIXES = SIGNAL_SUFFIXES + ('.fdt', '.eeg', '.vmrk', '.tsv', '.csv', '.txt', '.json')
@@ -295,7 +329,7 @@ def _run_job(job_id):
         else:
             struct = run_athlete_workflow(sources,test_source,dest,
                 team_id=athlete['team_id'],athlete_id=athlete['id'],
-                min_baselines=baseline_minimum(task))
+                min_baselines=baseline_minimum(task),executor=pipeline_pool())
             comparison = json.loads((dest/'comparative_analysis.json').read_text())
             baseline = json.loads((dest/'baseline'/'longitudinal.json').read_text())
             individual=[]
@@ -496,11 +530,36 @@ def _report_source(job_id: str, path: str) -> tuple[Path, dict]:
                     'job_mode': job.get('mode'), 'athlete_name': athlete, 'job_created_at': job.get('created_at')}
 
 
+def _longitudinal_subject(folder: Path, source: dict) -> dict:
+    """A dropped longitudinal report is sent as its structured statistics, like a team member.
+
+    The longitudinal HTML embeds every baseline report and player, which is far larger than the
+    statistics it is built from, so the pipeline's own comparison files are sent instead.
+    """
+    rel = source['path']
+    athlete_id = rel.split('/')[1] if rel.startswith('athletes/') else None
+    with database() as db:
+        job = dict(must_get(db, 'jobs', source['job_id']))
+        athlete_id = athlete_id or job.get('athlete_id')
+        athlete = db.execute('SELECT name FROM athletes WHERE id=?', (athlete_id,)).fetchone() if athlete_id else None
+        team = db.execute('SELECT name FROM teams WHERE id=?', (job.get('team_id'),)).fetchone() if job.get('team_id') else None
+    name = athlete['name'] if athlete else (source.get('athlete_name') or 'Athlete')
+    source['athlete_name'] = name
+    source['label'] = f'{name} · Longitudinal report'
+    evidence = ai_analysis.athlete_evidence(folder)
+    athletes = [{'athlete_name': name, 'athlete_id': athlete_id, 'job_id': source['job_id'], 'evidence': evidence}] if evidence else []
+    return {'type': 'athlete', 'team_name': team['name'] if team else None, 'athletes': athletes,
+            'athletes_without_comparison': [] if evidence else [name]}
+
+
 @app.post('/api/v2/ai-analysis/report')
 def ai_analyze_report(body: AIReportRequest):
     target, source = _report_source(body.job_id, body.path)
     try:
-        result = ai_analysis.analyze_html(target.read_text(encoding='utf-8', errors='replace'), source)
+        if ai_analysis.is_longitudinal_report(source['path']):
+            result = ai_analysis.analyze_subject(_longitudinal_subject(target.parent, source), source)
+        else:
+            result = ai_analysis.analyze_html(target.read_text(encoding='utf-8', errors='replace'), source)
     except Exception as exc:
         raise _ai_error(exc) from exc
     ai_analysis.save_result(ai_analysis.result_path(REPORTS, body.job_id, source['path']), result)
@@ -592,6 +651,9 @@ def ai_analyze_subject(body: AISubjectRequest):
     except Exception as exc:
         raise _ai_error(exc) from exc
     ai_analysis.save_result(_subject_result_path(body.type, body.id), result)
+    for report in result.get('reports') or []:  # each athlete's own report is also saved on its own
+        if report.get('source', {}).get('id'):
+            ai_analysis.save_result(_subject_result_path('athlete', report['source']['id']), report)
     return result
 
 

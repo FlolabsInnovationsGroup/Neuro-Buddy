@@ -310,7 +310,7 @@ def install(app, base):
         paths=[base.recording_path(r) for r in bases]
         struct=base.run_athlete_workflow(paths,base.recording_path(test),dest,team_id=athlete['team_id'],athlete_id=aid,
                 artifact_mode=req.get('artifact_mode','legacy'),mains_frequency_hz=req.get('mains_frequency_hz',60),
-                min_baselines=baseline_minimum(test['task_type']))
+                min_baselines=baseline_minimum(test['task_type']),executor=base.pipeline_pool())
         comparison=json.loads((dest/'comparative_analysis.json').read_text())
         baseline=json.loads((dest/'baseline'/'longitudinal.json').read_text())
         individual=[{'classification':'baseline','result':json.loads((dest/i['report_json']).read_text()),
@@ -334,15 +334,19 @@ def install(app, base):
                 with dbconn() as db:
                     base.must_get(db,'teams',req['target_id'])
                     athletes=[dict(r) for r in db.execute('SELECT * FROM athletes WHERE team_id=? ORDER BY name',(req['target_id'],))]
-                members=[]
-                for a in athletes:
+                def member(a):
                     member_dest=dest/'athletes'/a['id'];member_dest.mkdir(parents=True,exist_ok=True)
                     try:
                         with dbconn() as db:one=run_comparison(db,a['id'],req.get('task_type'),member_dest,req)
-                        members.append({'athlete_id':a['id'],'athlete_name':a['name'],'status':'completed',
-                            'relative_report':f'athletes/{a["id"]}/athlete_report.html','result':one})
+                        return {'athlete_id':a['id'],'athlete_name':a['name'],'status':'completed',
+                            'relative_report':f'athletes/{a["id"]}/athlete_report.html','result':one}
                     except Exception as exc:
-                        members.append({'athlete_id':a['id'],'athlete_name':a['name'],'status':'skipped','message':str(exc)})
+                        return {'athlete_id':a['id'],'athlete_name':a['name'],'status':'skipped','message':str(exc)}
+                # Athletes run side by side; their recordings share the pipeline process pool.
+                # Members keep the same order as before (by name).
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=max(1,min(len(athletes),8)),thread_name_prefix='neurobuddy-team') as pool:
+                    members=list(pool.map(member,athletes))
                 if not any(m['status']=='completed' for m in members):
                     raise ValueError('No athletes have enough compatible uploaded baseline EEGs and 1 testing EEG for this task. Oddball needs 2 baselines; sleep, motor, and unspecified need 3.')
                 result={'mode':'team','team_id':req['target_id'],'members':members,'task_type':req.get('task_type'),'entrypoint':None}
@@ -377,6 +381,11 @@ def install(app, base):
         base.WORKERS.submit(run_job,key,req.model_dump())
         return {'id':key,'status':'queued','mode':req.mode}
 
+    def longitudinal_reports(job_id,member_athlete_id=None):
+        # AI Processing offers only longitudinal reports (testing compared with the baselines).
+        return [h for h in ai_analysis.list_html_reports(base.REPORTS,job_id,member_athlete_id)
+                if ai_analysis.is_longitudinal_report(h['path'])]
+
     @router.get('/shelf-advanced')
     def advanced_packages():
         """Index per-athlete result packages, including analyses from a team batch."""
@@ -395,12 +404,12 @@ def install(app, base):
                 for j in jobs:
                     if j['mode'] in ('single','athlete') and j['athlete_id']==a['id']:
                         reports.append({'id':j['id'],'mode':j['mode'],'created_at':j['created_at'],'member_athlete_id':None,
-                            'html_reports':ai_analysis.list_html_reports(base.REPORTS,j['id'])})
+                            'html_reports':longitudinal_reports(j['id'])})
                     elif j['mode']=='team' and j['team_id']==t['id'] and j['result']:
                         data=json.loads(j['result'])
                         if any(m.get('status')=='completed' and m.get('athlete_id')==a['id'] for m in data.get('members',[])):
                             reports.append({'id':j['id'],'mode':'team','created_at':j['created_at'],'member_athlete_id':a['id'],
-                                'html_reports':ai_analysis.list_html_reports(base.REPORTS,j['id'],a['id'])})
+                                'html_reports':longitudinal_reports(j['id'],a['id'])})
                 shelves=[]
                 for rec in recordings:
                     if rec['athlete_id']!=a['id']:continue
