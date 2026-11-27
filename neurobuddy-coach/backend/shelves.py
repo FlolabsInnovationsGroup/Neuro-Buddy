@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from backend.openneuro_connector import graphql as _openneuro_graphql
 from backend import remote_imports
+from backend import ai_analysis
 from neurobuddy_v2.comparative import baseline_minimum
 
 TASKS = ('oddball','motor','sleep','unspecified')
@@ -393,11 +394,13 @@ def install(app, base):
                 reports=[]
                 for j in jobs:
                     if j['mode'] in ('single','athlete') and j['athlete_id']==a['id']:
-                        reports.append({'id':j['id'],'mode':j['mode'],'created_at':j['created_at'],'member_athlete_id':None})
+                        reports.append({'id':j['id'],'mode':j['mode'],'created_at':j['created_at'],'member_athlete_id':None,
+                            'html_reports':ai_analysis.list_html_reports(base.REPORTS,j['id'])})
                     elif j['mode']=='team' and j['team_id']==t['id'] and j['result']:
                         data=json.loads(j['result'])
                         if any(m.get('status')=='completed' and m.get('athlete_id')==a['id'] for m in data.get('members',[])):
-                            reports.append({'id':j['id'],'mode':'team','created_at':j['created_at'],'member_athlete_id':a['id']})
+                            reports.append({'id':j['id'],'mode':'team','created_at':j['created_at'],'member_athlete_id':a['id'],
+                                'html_reports':ai_analysis.list_html_reports(base.REPORTS,j['id'],a['id'])})
                 shelves=[]
                 for rec in recordings:
                     if rec['athlete_id']!=a['id']:continue
@@ -407,7 +410,7 @@ def install(app, base):
                         'bytes':sum(item['size_bytes'] for item in file_rows if item['recording_id']==rec['id'])})
                 if reports:members.append({'id':a['id'],'name':a['name'],'reports':reports,'shelves':shelves})
             if members:groups.append({'id':t['id'],'name':t['name'],'athletes':members})
-        return {'teams':groups,'ai_connected':False,'pipeline_version':base.PIPELINE_VERSION}
+        return {'teams':groups,'ai_connected':ai_analysis.is_configured(),'pipeline_version':base.PIPELINE_VERSION}
 
     # Public metadata browser. Fixed upstream host, validated dataset IDs, read-only GraphQL.
     @router.get('/openneuro/{dataset_id}')

@@ -1,12 +1,13 @@
 /* Coach Atlas v0.3. Original three-tab UI, central persistent Repository.
-   Optimized Neurobuddy 0.7.1 scientific engine runs server-side. AI not connected. */
+   Optimized Neurobuddy 0.7.1 scientific engine runs server-side. Optional external AI
+   analysis API (placeholder until configured) for generated HTML reports. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
   const BASE = '/api';
   const html = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const fmt = v => v===null||v===undefined?'Not available':typeof v==='number'?Number(v).toPrecision(5).replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,''):String(v);
-  const state = {tab:'library',library:{teams:[]},preview:null,jobs:[],advanced:{teams:[]},target:null,selectedJob:null,advancedSelection:null,busy:false};
+  const state = {tab:'library',library:{teams:[]},preview:null,jobs:[],advanced:{teams:[]},target:null,selectedJob:null,advancedSelection:null,busy:false,aiReport:null,aiStatus:null,aiBusy:false,aiResult:null};
   const LIBRARY_TRANSFER_MIME = 'application/x-neurobuddy-library+json';
   const LIBRARY_TRANSFER_SCHEMA = 'neurobuddy.library-transfer/1';
   const signalExt = ['.set','.edf','.bdf','.vhdr','.fif','.fif.gz'];
@@ -216,11 +217,23 @@
     }
     return null;
   }
+  function aiReportChips(athlete){
+    const runs=(athlete.reports||[]).filter(r=>(r.html_reports||[]).length);
+    if(!runs.length)return '';
+    return `<div class="ai-report-list"><div class="ai-report-heading">HTML reports · drag into AI processing</div>${runs.map(r=>{
+      const when=new Date(r.created_at).toLocaleString();
+      const kind=r.mode==='single'?'Single EEG':r.mode==='team'?'Team batch':'Athlete comparison';
+      return `<div class="ai-report-run"><small>${html(kind)} · ${html(when)}</small><div class="actions">${r.html_reports.map(h=>{
+        const active=state.aiReport&&state.aiReport.kind==='job'&&state.aiReport.job_id===h.job_id&&state.aiReport.path===h.path;
+        return `<button type="button" class="secondary-button small-btn ai-report-chip${active?' active':''}" draggable="true" data-ai-job="${html(h.job_id)}" data-ai-path="${html(h.path)}" data-ai-label="${html(athlete.name+' · '+h.label+' · '+when)}" title="Drag into the AI processing area, or click to select">⧉ ${html(h.label)}</button>`;}).join('')}</div></div>`;}).join('')}</div>`;
+  }
   async function loadAdvanced(){
+    safe(loadAIStatus);
     state.advanced=await api('/v2/shelf-advanced');
     $('advanced-tree').innerHTML=state.advanced.teams.map(t=>`<details open class="folder"><summary>▱ ${html(t.name)} <span class="small-count">${t.athletes.length} athlete(s)</span></summary><div class="folder-inner">
       <div class="actions"><button class="secondary-button small-btn" draggable="true" data-advanced-type="team" data-advanced-id="${html(t.id)}">↗ Select / Drag Team results</button><button type="button" class="danger-icon" data-delete-advanced-team="${html(t.id)}" title="Delete this team">Delete team</button></div>
       ${t.athletes.map(a=>`<article class="recording"><div class="recording-top"><strong>♙ ${html(a.name)}</strong>${badge('completed')}</div><small>${a.reports.length} saved run(s)</small><div class="actions"><button class="secondary-button small-btn" draggable="true" data-advanced-type="athlete" data-advanced-id="${html(a.id)}">↗ Select / Drag Athlete results</button><button type="button" class="danger-icon" data-delete-advanced-athlete="${html(a.id)}" title="Delete this athlete">Delete athlete</button></div>
+        ${aiReportChips(a)}
         <div class="advanced-shelves">${(a.shelves||[]).map(s=>`<div class="advanced-shelf"><span>${html(advancedShelfLabel(s))}</span><button type="button" class="danger-icon" data-delete-shelf="${html(s.id)}" title="Delete this EEG shelf">Delete shelf</button></div>`).join('')||'<p class="helper">No EEG shelves for this athlete.</p>'}</div></article>`).join('')}
       </div></details>`).join('')||'<div class="empty">Completed EEG analyses will appear here by Team and Athlete.</div>';
   }
@@ -353,11 +366,186 @@
     if(athlete){safe(()=>deleteAdvancedAthlete(athlete.dataset.deleteAdvancedAthlete));return;}
     const team=e.target.closest('[data-delete-advanced-team]');
     if(team){safe(()=>deleteAdvancedTeam(team.dataset.deleteAdvancedTeam));return;}
+    const report=e.target.closest('[data-ai-path]');
+    if(report){safe(()=>selectAIReport({kind:'job',job_id:report.dataset.aiJob,path:report.dataset.aiPath,label:report.dataset.aiLabel}));return;}
     const b=e.target.closest('[data-advanced-type]');
-    if(b)safe(()=>chooseAdvanced(b.dataset.advancedType,b.dataset.advancedId));
+    if(b){safe(()=>selectAISubject(b.dataset.advancedType,b.dataset.advancedId));}
   });
-  $('advanced-tree').addEventListener('dragstart',e=>{const b=e.target.closest('[data-advanced-type]');if(b){e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('application/x-neurobuddy-advanced',JSON.stringify({type:b.dataset.advancedType,id:b.dataset.advancedId}));}});
-  attachDrop($('advanced-drop'),'application/x-neurobuddy-advanced',item=>safe(()=>chooseAdvanced(item.type,item.id)));
+  $('advanced-tree').addEventListener('dragstart',e=>{const r=e.target.closest('[data-ai-path]');if(r){e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('application/x-neurobuddy-report',JSON.stringify({job_id:r.dataset.aiJob,path:r.dataset.aiPath,label:r.dataset.aiLabel}));return;}const b=e.target.closest('[data-advanced-type]');if(b){e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData('application/x-neurobuddy-advanced',JSON.stringify({type:b.dataset.advancedType,id:b.dataset.advancedId}));}});
+  // ---------------------------------------------------------------- AI report analysis
+  const REPORT_MIME='application/x-neurobuddy-report';
+  async function loadAIStatus(){
+    state.aiStatus=await api('/v2/ai-analysis/status');
+    const chip=$('ai-status-chip');
+    chip.textContent=state.aiStatus.configured?`AI backend: Connected (${state.aiStatus.endpoint_host})`:'AI backend: Not configured';
+    chip.classList.toggle('connected',state.aiStatus.configured);
+    renderAIControls();
+  }
+  function renderAIControls(){
+    const button=$('process-ai'),help=$('ai-help');
+    const configured=Boolean(state.aiStatus&&state.aiStatus.configured);
+    button.disabled=state.aiBusy||!state.aiReport||!configured;
+    button.textContent=state.aiBusy?'Analyzing report…':configured?'Process with AI':'Process with AI · Not configured';
+    button.title=!configured?'Set NEUROBUDDY_AI_API_URL on the computer running Coach, then restart it.':!state.aiReport?'Drop an athlete, a team or an HTML report first':'Send this selection to the AI for analysis';
+    if(state.aiStatus&&!configured)help.innerHTML='The AI analysis API is not connected yet. When FloLabs supplies it, set <code>NEUROBUDDY_AI_API_URL</code> (and <code>NEUROBUDDY_AI_API_KEY</code>) in the terminal that starts Coach, then restart it. You can still select reports and prepare JSON packages.';
+    else help.textContent=`Drop an athlete or a team to send every baseline statistic and the testing comparison, or drop one HTML report. The AI analysis API (${state.aiStatus?.endpoint_host||'external'}) lists the metrics outside and within ±3 SD of baseline with their z-scores and what they may be related to (recovery, fatigue, sleep, stress, attention). Results are exploratory, not a diagnosis.`;
+  }
+  async function selectAIReport(report){
+    state.aiReport=report;state.advancedSelection=null;
+    $('preview-package').disabled=true;$('download-package').disabled=true;$('package-json').hidden=true;
+    $('advanced-selection').textContent=`Selected HTML report: ${report.label}. Press Process with AI to analyze it.`;
+    document.querySelectorAll('.ai-report-chip').forEach(b=>b.classList.toggle('active',report.kind==='job'&&b.dataset.aiJob===report.job_id&&b.dataset.aiPath===report.path));
+    renderAIControls();
+    $('ai-result-panel').hidden=true;
+    if(report.kind==='job'){
+      try{const saved=await api(`/v2/ai-analysis/report?job_id=${encodeURIComponent(report.job_id)}&path=${encodeURIComponent(report.path)}`);
+        if(state.aiReport===report&&saved.saved)showAIResult(saved,true);}
+      catch{/* no saved analysis yet */}
+    }
+  }
+  async function selectAISubject(type,id){
+    const team=state.advanced.teams.find(t=>t.id===id||t.athletes.some(a=>a.id===id));
+    const athlete=type==='athlete'&&team?team.athletes.find(a=>a.id===id):null;
+    const label=type==='team'?`${team?team.name:'Team'} (team, ${team?team.athletes.length:0} athlete(s))`:`${athlete?athlete.name:'Athlete'} (athlete)`;
+    const subject={kind:'subject',type,id,label};
+    state.aiReport=subject;
+    document.querySelectorAll('.ai-report-chip').forEach(b=>b.classList.remove('active'));
+    renderAIControls();
+    $('ai-result-panel').hidden=true;
+    await chooseAdvanced(type,id);
+    $('advanced-selection').textContent=`Selected ${label}: every baseline statistic and the testing session compared against it. Press Process with AI to analyze.`;
+    try{const saved=await api(`/v2/ai-analysis/subject?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+      if(state.aiReport===subject&&saved.saved)showAIResult(saved,true);}
+    catch{/* no saved analysis yet */}
+  }
+  function selectAIFile(file){
+    if(!file)return;
+    if(!/\.html?$/i.test(file.name)){notify('Drop a Neurobuddy HTML report (.html file).','error');return;}
+    selectAIReport({kind:'file',file,label:`${file.name} (${fmtSize(file.size)}) from this computer`});
+  }
+  function inlineMarkdown(text){
+    return html(text).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g,'$1<em>$2</em>');
+  }
+  function renderMarkdown(md){
+    const lines=String(md||'').replace(/\r/g,'').split('\n');const out=[];let list=null,para=[];
+    const flush=()=>{if(para.length){out.push(`<p>${inlineMarkdown(para.join(' '))}</p>`);para=[];}if(list){out.push(`</${list}>`);list=null;}};
+    for(let i=0;i<lines.length;i++){
+      const line=lines[i];
+      if(/^\s*\|.*\|\s*$/.test(line)&&i+1<lines.length&&/^\s*\|?\s*:?-{2,}/.test(lines[i+1])){
+        flush();const cells=r=>r.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+        const head=cells(line);i+=2;const rows=[];
+        while(i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i])){rows.push(cells(lines[i]));i++;}i--;
+        out.push(`<div class="table-scroll"><table class="metrics-table"><thead><tr>${head.map(c=>`<th>${inlineMarkdown(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${inlineMarkdown(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+        continue;
+      }
+      const quote=line.match(/^\s*>\s?(.*)$/);
+      if(quote){flush();out.push(`<blockquote>${inlineMarkdown(quote[1])}</blockquote>`);continue;}
+      const h=line.match(/^(#{1,6})\s+(.*)$/);
+      if(h){flush();const level=Math.min(6,h[1].length+1);out.push(`<h${level}>${inlineMarkdown(h[2])}</h${level}>`);continue;}
+      const bullet=line.match(/^\s*[-*]\s+(.*)$/),num=line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if(bullet||num){if(para.length){out.push(`<p>${inlineMarkdown(para.join(' '))}</p>`);para=[];}const tag=bullet?'ul':'ol';if(list!==tag){if(list)out.push(`</${list}>`);out.push(`<${tag}>`);list=tag;}out.push(`<li>${inlineMarkdown((bullet||num)[1])}</li>`);continue;}
+      if(!line.trim()){flush();continue;}
+      if(list){out.push(`</${list}>`);list=null;}
+      para.push(line.trim());
+    }
+    flush();return out.join('');
+  }
+  // Put the "Outside ±3 SD" and "Within ±3 SD" sections next to each other.
+  function pairSideBySide(root){
+    const headings=[...root.querySelectorAll('h2,h3,h4')];
+    const section=h=>{const level=Number(h.tagName[1]);const nodes=[h];let n=h.nextElementSibling;
+      while(n&&!(/^H[1-6]$/.test(n.tagName)&&Number(n.tagName[1])<=level)){nodes.push(n);n=n.nextElementSibling;}return nodes;};
+    headings.filter(h=>/^Outside\s*±\s*3\s*SD/i.test(h.textContent)).forEach(h=>{
+      const outside=section(h),last=outside[outside.length-1],next=last.nextElementSibling;
+      if(!next||!/^Within\s*±\s*3\s*SD/i.test(next.textContent)||next.tagName!==h.tagName)return;
+      const within=section(next),grid=document.createElement('div');grid.className='ai-columns';
+      h.before(grid);
+      for(const [nodes,cls] of [[outside,'ai-column outside'],[within,'ai-column within']]){
+        const col=document.createElement('div');col.className=cls;nodes.forEach(x=>col.appendChild(x));grid.appendChild(col);}
+    });
+  }
+  // Colour the "Range" cells: out of range in red, in range in green.
+  function markRanges(root){
+    root.querySelectorAll('td').forEach(td=>{const t=td.textContent.trim();
+      if(/^Out of range/i.test(t))td.classList.add('range-out');else if(/^In range/i.test(t))td.classList.add('range-in');});
+  }
+  const AI_REPORT_CSS=`*{box-sizing:border-box}body{margin:0;background:#f5f6fa;color:#1c2333;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:40px 28px 60px}header.top{border-bottom:3px solid #5b4bdb;padding-bottom:18px;margin-bottom:8px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#5b4bdb;font-weight:700}h1{font-size:30px;margin:6px 0 4px}
+.meta{color:#5a6478;font-size:13px}.disclaimer{background:#fff6e8;border-left:4px solid #e3a23c;padding:10px 14px;border-radius:6px;font-size:13px;margin:18px 0}
+h2{font-size:21px;margin:34px 0 10px;padding:10px 14px;background:#ecebfb;border-radius:8px;color:#2d2470}h3{font-size:16px;margin:20px 0 8px;color:#2d2470}h4{font-size:14px;margin:16px 0 6px}
+.table-scroll{overflow-x:auto;margin:8px 0 14px;border:1px solid #dfe2ea;border-radius:8px;background:#fff}table{border-collapse:collapse;width:100%;font-size:13px}
+th{background:#f0f1f6;text-align:left;font-weight:700;padding:8px 10px;border-bottom:1px solid #dfe2ea}td{padding:8px 10px;border-bottom:1px solid #eef0f4;vertical-align:top}
+tr:last-child td{border-bottom:0}td.range-out{color:#b3261e;font-weight:700;background:#fdecea;white-space:nowrap}td.range-in{color:#1b7a52;font-weight:600;background:#eaf7f1;white-space:nowrap}
+ul,ol{padding-left:22px}li{margin:4px 0}code{background:#eef0f6;padding:1px 5px;border-radius:4px;font-size:12px}blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid #c9cde0;color:#4a5266}
+footer{margin-top:40px;color:#6b7386;font-size:12px;border-top:1px solid #dfe2ea;padding-top:12px}@media print{body{background:#fff}h2{break-after:avoid}tr{break-inside:avoid}}`;
+  function aiReportHTML(r){
+    const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const body=document.createElement('div');body.innerHTML=renderMarkdown(r.analysis_markdown);markRanges(body);
+    const when=r.created_at?new Date(r.created_at).toLocaleString():'';
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Neuro-Buddy AI analysis · ${esc(r.source?.label||'report')}</title><style>${AI_REPORT_CSS}</style></head><body><main>
+<header class="top"><div class="eyebrow">Neuro-Buddy · AI interpretation · exploratory</div><h1>AI analysis · ${esc(r.source?.label||'EEG report')}</h1><div class="meta">${esc(when)} · Model ${esc(r.model||'')}</div></header>
+<div class="disclaimer">${esc(r.disclaimer||'Exploratory AI interpretation. Not a diagnosis or a readiness decision.')} Each value is compared with this athlete's own baseline: "Out of range" means more than 3 standard deviations from the baseline mean.</div>
+${body.innerHTML}
+<footer>Generated by Neuro-Buddy Coach from the pipeline's own statistics. It can be wrong, it is not a medical or sleep diagnosis, and it is not a training-readiness decision. Review it with a qualified professional.</footer></main></body></html>`;
+  }
+  function showAIResult(result,saved=false){
+    state.aiResult=result;
+    $('ai-result-title').textContent=`AI analysis · ${result.source?.label||'HTML report'}`;
+    const when=result.created_at?new Date(result.created_at).toLocaleString():'';
+    const sent=result.athletes_sent!=null?`${result.athletes_sent} athlete(s) sent`:`${result.figures_sent??0} figure(s) sent`;
+    $('ai-result-meta').textContent=`${saved?'Saved analysis':'New analysis'} · ${result.model||''} · ${when} · ${sent}${result.truncated?' · Output was cut off at the length limit':''}`;
+    $('ai-result').innerHTML=renderMarkdown(result.analysis_markdown);
+    pairSideBySide($('ai-result'));
+    markRanges($('ai-result'));
+    $('ai-result-panel').hidden=false;
+  }
+  async function runAI(){
+    const report=state.aiReport;
+    if(!report||state.aiBusy)return;
+    state.aiBusy=true;renderAIControls();
+    $('advanced-selection').textContent=`Analyzing ${report.label}. This usually takes one to three minutes.`;
+    try{
+      let result;
+      if(report.kind==='job')result=await api('/v2/ai-analysis/report',jsonOpt('POST',{job_id:report.job_id,path:report.path}));
+      else if(report.kind==='subject')result=await api('/v2/ai-analysis/subject',jsonOpt('POST',{type:report.type,id:report.id}));
+      else{const form=new FormData();form.append('file',report.file,report.file.name);result=await api('/v2/ai-analysis/upload',{method:'POST',body:form});}
+      showAIResult(result);
+      $('advanced-selection').textContent=`AI analysis complete for ${report.label}.`;
+      notify('AI analysis complete. It is exploratory and not a diagnosis.','success');
+      $('ai-result-panel').scrollIntoView({behavior:'smooth',block:'start'});
+    }catch(e){
+      $('advanced-selection').textContent=`AI analysis failed: ${e.message}`;
+      throw e;
+    }finally{state.aiBusy=false;renderAIControls();}
+  }
+  const advancedDrop=$('advanced-drop');
+  advancedDrop.addEventListener('dragover',e=>{const types=[...e.dataTransfer.types];if(types.includes('application/x-neurobuddy-advanced')||types.includes(REPORT_MIME)||types.includes('Files')){e.preventDefault();advancedDrop.classList.add('drag-over');}});
+  advancedDrop.addEventListener('dragleave',()=>advancedDrop.classList.remove('drag-over'));
+  advancedDrop.addEventListener('drop',e=>{
+    advancedDrop.classList.remove('drag-over');
+    const report=e.dataTransfer.getData(REPORT_MIME),pkg=e.dataTransfer.getData('application/x-neurobuddy-advanced');
+    try{
+      if(report){e.preventDefault();const r=JSON.parse(report);safe(()=>selectAIReport({kind:'job',job_id:r.job_id,path:r.path,label:r.label}));return;}
+      if(pkg){e.preventDefault();const item=JSON.parse(pkg);safe(()=>selectAISubject(item.type,item.id));return;}
+      if(e.dataTransfer.files&&e.dataTransfer.files.length){e.preventDefault();selectAIFile(e.dataTransfer.files[0]);}
+    }catch(err){notify(err.message,'error');}
+  });
+  $('choose-ai-report').addEventListener('click',e=>{e.stopPropagation();$('ai-report-file').value='';$('ai-report-file').click();});
+  $('ai-report-file').addEventListener('change',e=>selectAIFile(e.target.files&&e.target.files[0]));
+  $('process-ai').addEventListener('click',()=>safe(runAI));
+  $('download-ai-html').addEventListener('click',()=>{
+    const r=state.aiResult;if(!r)return;
+    const name=String(r.source?.label||'report').replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'report';
+    const blob=new Blob([aiReportHTML(r)],{type:'text/html'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download=`neurobuddy-ai-analysis-${name}.html`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  $('download-ai-result').addEventListener('click',()=>{
+    const r=state.aiResult;if(!r)return;
+    const header=`# AI report analysis\n\nSource: ${r.source?.label||''}\nModel: ${r.model||''}\nCreated: ${r.created_at||''}\n\n> ${r.disclaimer||''}\n\n`;
+    const blob=new Blob([header+r.analysis_markdown],{type:'text/markdown'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='neurobuddy-ai-analysis.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
   $('preview-package').addEventListener('click',()=>{if(state.advancedSelection){$('package-json').textContent=JSON.stringify(state.advancedSelection,null,2);$('package-json').hidden=false;}});
   $('download-package').addEventListener('click',()=>{if(state.advancedSelection)downloadJSON(state.advancedSelection,`neurobuddy-${state.advancedSelection.type}-analysis.json`);});
   window.addEventListener('hashchange',()=>navigate(['library','analysis','advanced'].includes(location.hash.slice(1))?location.hash.slice(1):'library'));
